@@ -1,0 +1,90 @@
+name: terraform
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "configs/runner.yaml"
+  pull_request:
+    paths:
+      - "terraform/**"
+      - "configs/runner.yaml"
+
+jobs:
+  fmt-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.16"
+          terraform_wrapper: false
+
+      - uses: autero1/action-terragrunt@v3
+        with:
+          terragrunt-version: "1.1.4"
+
+      - name: Format check (Terragrunt HCL)
+        run: terragrunt hcl fmt --working-dir terraform --check --diff
+
+      - name: Format check (the single Terraform module)
+        run: terraform fmt -recursive -check terraform/modules
+
+      - name: Validate Terragrunt HCL
+        run: terragrunt hcl validate --working-dir terraform
+
+      # `terraform validate` on the module directly, not `terragrunt
+      # validate` — the latter runs `terraform init` against the real S3
+      # state backend, which doesn't exist yet for a repo that hasn't been
+      # deployed. This still fully validates the module's HCL/types without
+      # needing AWS credentials or a state bucket.
+      - name: Validate Terraform module
+        working-directory: terraform/modules/github-runner-on-aws
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+  # Plan requires this repo's own AWS account (for the S3 state backend and
+  # to talk to the AWS API), so it only runs once AWS_ROLE_TO_ASSUME is set
+  # as a repository secret (OIDC — see
+  # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services).
+  plan:
+    needs: fmt-and-validate
+    if: ${{ secrets.AWS_ROLE_TO_ASSUME != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build Lambda binaries
+        run: |
+          ./scripts/build.sh
+          ./scripts/package.sh
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.16"
+          terraform_wrapper: false
+
+      - uses: autero1/action-terragrunt@v3
+        with:
+          terragrunt-version: "1.1.4"
+
+      - name: Plan
+        working-directory: terraform/environments/main
+        run: |
+          terragrunt init -input=false
+          terragrunt plan -input=false

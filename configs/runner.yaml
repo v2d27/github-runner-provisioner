@@ -1,0 +1,162 @@
+# Single source of truth for this platform — both the application policy
+# (github/webhook/runner, below) and the Terragrunt/Terraform deployment
+# knobs (infrastructure, at the bottom).
+#
+# terraform/environments/main/terragrunt.hcl reads this whole file:
+#   - github/webhook/runner are re-encoded as JSON and handed to every Lambda
+#     as the RUNNER_CONFIG_JSON environment variable.
+#   - infrastructure.main supplies the Terraform module's inputs — one edit
+#     here updates both the app config and the infra it deploys onto, so the
+#     two can never drift apart.
+#
+# Comments follow a "-- <description>" convention (as in a Helm chart's
+# values.yaml) so every field is self-documenting from this file alone.
+#
+# Developers never see or choose any of this: they only declare
+# `runs-on: [self-hosted, <label>, ...]` in their workflow, where <label> is
+# one of a profile's `labels` below.
+
+github:
+  # -- (int) GitHub App ID (GitHub: Settings > Developer settings > GitHub Apps > your app).
+  app_id: 123456
+  # -- (int) Installation ID for the org/repo below. Leave as 0 to have the
+  # platform resolve it dynamically (one JWT-authenticated API call) and
+  # cache the result, instead of hardcoding it here.
+  installation_id: 0
+  # -- (string) Secrets Manager secret *name* holding the GitHub App's PEM
+  # private key. Terraform creates this secret's container; you populate its
+  # value out-of-band, once, after apply (never through Terraform/CI).
+  private_key_secret_name: "github-runner/app/private-key"
+
+webhook:
+  # -- (string) Secrets Manager secret *name* holding the webhook's HMAC
+  # signing secret, used to verify X-Hub-Signature-256. Populated
+  # out-of-band, same as github.private_key_secret_name above.
+  secret_name: "github-runner/webhook/secret"
+
+runner:
+  # -- (string) "repository" or "organization". GitHub Runner Groups only
+  # exist at the organization level, so `group` below must stay empty ("")
+  # when scope is "repository" — enforced at config-load time.
+  scope: repository
+
+  # -- (string) GitHub organization (or user) that owns the repository/org
+  # this platform registers runners against. Always required.
+  organization: "my-org"
+
+  # -- (string) Repository name. Required when scope is "repository";
+  # ignored when scope is "organization".
+  repository: "erp-sport"
+
+  # -- (string) GitHub Runner Group to register into. Empty string ("") =
+  # GitHub's default runner group. Must stay empty when scope is
+  # "repository" (see scope above).
+  group: ""
+
+  # -- (duration string, e.g. "5m") How long a runner stays IDLE
+  # (registered, unclaimed by any job) before this platform terminates it.
+  idle_timeout: 5m
+
+  # -- (map) Named runner shapes. A workflow_job matches a profile if its
+  # runs-on: labels contain AT LEAST ONE of that profile's `labels` — not
+  # necessarily all of them. A label may only belong to one profile
+  # (rejected at config-load time as ambiguous otherwise), so at most one
+  # profile can ever match.
+  #
+  # There's no separate platform-wide prefix: labels are entirely your own
+  # naming. If you want to avoid colliding with an unrelated workflow in the
+  # same GitHub organization, name your labels yourself using the
+  # convention "<project_name>-<label>", e.g. "erp-sport-amd64" — that's
+  # exactly what the example profiles below do.
+  profiles:
+    # -- (map) Example profile key "amd64" — the map key itself is only
+    # used for logging/tagging (and as the default label if `labels` is
+    # left empty); what actually gates matching is the `labels` list below.
+    amd64:
+      # -- (list of string, optional) A workflow_job matches this profile if
+      # runs-on: contains any one of these. Leave empty/omitted to default
+      # to a single label equal to this profile's own key ("amd64").
+      labels:
+        - erp-sport-amd64
+      # -- (string) EC2/GitHub runner architecture: "x86_64" or "arm64".
+      # Must agree with whichever of `ami` / `ami_lookup` you set below.
+      architecture: x86_64
+      # -- (map, optional) Resolve to the newest matching AMI at every
+      # launch instead of pinning one — see `ami` below for the
+      # alternative. Exactly one of `ami` / `ami_lookup` must be set.
+      ami_lookup:
+        # -- (string) "amazon-linux" or "ubuntu" — see internal/aws.AMIResolver
+        # for exactly what each resolves to.
+        os: amazon-linux
+        # -- (string) Release version for the chosen os. Supported:
+        # amazon-linux "2023"; ubuntu "24.04" / "22.04" / "20.04".
+        version: "2023"
+      # -- (string, optional) A pinned AMI ID — you control exactly when it
+      # changes, via a PR to this file. Mutually exclusive with ami_lookup.
+      # (commented out here since this profile uses ami_lookup instead)
+      # ami: "ami-xxxxxxxxxxxxxxxxx"
+      # -- (string) EC2 instance type to launch for this profile.
+      instance_type: c7i.large
+      # -- (bool) Launch as an EC2 Spot instance (cost-optimized, may be
+      # interrupted with ~2 minutes' notice) instead of On-Demand.
+      spot: true
+
+    # -- (map) Example profile key "arm64", demonstrating the pinned-`ami`
+    # alternative to `ami_lookup` above.
+    arm64:
+      # -- (list of string, optional) See amd64.labels above.
+      labels:
+        - erp-sport-arm64
+      # -- (string) See amd64.architecture above.
+      architecture: arm64
+      # -- (string) Pinned AMI ID — swap for ami_lookup (see amd64 above) if
+      # you'd rather always launch the newest matching image.
+      ami: "ami-yyyyyyyyyyyyyyyyy"
+      # -- (string) See amd64.instance_type above.
+      instance_type: c7g.large
+      # -- (bool) See amd64.spot above.
+      spot: true
+
+# Terragrunt/Terraform deployment knobs for the single "main" environment
+# (terraform/environments/main/terragrunt.hcl). There is no Go equivalent of
+# this section — the application Lambdas never see it, only Terraform does
+# (as module input variables).
+infrastructure:
+  main:
+    # -- (string) AWS region to deploy into.
+    aws_region: ap-southeast-1
+    # -- (string) Prefix applied to every resource name/tag this stack
+    # creates, e.g. "<project_name>-main-runners" for the DynamoDB table.
+    project_name: provision-github-runner
+
+    # -- (string, optional) Existing VPC ID to deploy into. Leave all three
+    # existing_* fields null to have this stack create its own minimal,
+    # self-contained VPC instead.
+    existing_vpc_id: null
+    # -- (list of string, optional) Existing subnet IDs — required
+    # alongside existing_vpc_id. Runners launch into the first subnet in
+    # this list (single-AZ in this version).
+    existing_subnet_ids: null
+    # -- (string, optional) Existing security group ID to attach runners
+    # to, instead of creating a new one.
+    existing_security_group_id: null
+
+    # -- (bool) Enable DynamoDB point-in-time recovery. Cheap insurance —
+    # leave this on unless you have a specific reason not to.
+    dynamodb_point_in_time_recovery_enabled: true
+    # -- (bool) React to EC2 Spot interruption notices immediately (an
+    # EventBridge rule) instead of waiting for the next 3-minute sweep.
+    enable_spot_interruption_rule: true
+
+    # -- (int, seconds) webhook Lambda timeout.
+    webhook_lambda_timeout: 10
+    # -- (int, seconds) provision Lambda timeout. Also determines the SQS
+    # queue's visibility timeout (6x this value) — see terraform module's
+    # sqs.tf.
+    provision_lambda_timeout: 60
+    # -- (int, seconds) cleanup Lambda timeout.
+    cleanup_lambda_timeout: 60
+
+    # -- (map of string) Extra tags merged onto every resource, alongside
+    # the Project/Environment/ManagedBy tags Terragrunt always adds.
+    tags: {}
