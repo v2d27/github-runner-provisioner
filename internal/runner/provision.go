@@ -42,7 +42,7 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 	}
 
 	runnerID := store.NewRunnerID()
-	names := runnerNames(sel.Profile, runnerID, profile.RunnerCount)
+	base, names := runnerNames(sel.Profile, runnerID, profile.RunnerCount)
 	labels := runnerLabels(profile.Labels)
 
 	runnerRow := store.NewProvisioningRunner(sel, runnerID, names, labels, profile.Architecture, profile.InstanceType, imageID)
@@ -72,7 +72,11 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 		DiskSizeGB:       profile.DiskSizeGB,
 		UserData:         userData,
 		Tags: map[string]string{
-			"Name":          names[0],
+			// The bare base name, not a per-slot name (e.g. not names[0]) —
+			// one EC2 instance can host multiple runner slots
+			// (profile.RunnerCount), so tagging it with a single slot's
+			// identity would be misleading.
+			"Name":          base,
 			"ManagedBy":     "github-runner-provisioner",
 			"RunnerProfile": sel.Profile,
 		},
@@ -94,7 +98,7 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 		return fmt.Errorf("runner: record instance id: %w", err)
 	}
 
-	if err := s.store.BindToJob(ctx, runnerID, job.JobID, job.WorkflowRunID); err != nil {
+	if err := s.store.BindToJob(ctx, runnerID, job.JobID, job.WorkflowRunID, sel, profile.RunnerCount, s.cfg.Runner.IdleTimeout.Duration()); err != nil {
 		return fmt.Errorf("runner: bind runner to job: %w", err)
 	}
 
@@ -118,23 +122,26 @@ func (s *Service) revertProvisioning(ctx context.Context, job *store.Job) {
 	}
 }
 
-// runnerNames produces one GitHub-registration name per runner process the
-// instance will run (count — config.Profile.RunnerCount, 1-2), e.g.
-// "amd64-abc1234567-1". Each doubles as a lookup key cleanup uses to resolve
-// its GitHub-assigned runner ID (GitHub's registration API doesn't return one
-// directly) — see store.Runner.Names.
-func runnerNames(profile, runnerID string, count int) []string {
+// runnerNames returns the instance's bare base name (used for the EC2 Name
+// tag — never suffixed, since one instance can host multiple runner slots)
+// alongside one GitHub-registration name per runner process it will run
+// (count — config.Profile.RunnerCount, 1-2), e.g. base "amd64-abc1234567"
+// with names "amd64-abc1234567-1", "amd64-abc1234567-2". Each name doubles
+// as a lookup key cleanup uses to resolve its GitHub-assigned runner ID
+// (GitHub's registration API doesn't return one directly) — see
+// store.Slot.Name.
+func runnerNames(profile, runnerID string, count int) (base string, names []string) {
 	short := runnerID
 	if len(short) > 10 {
 		short = short[len(short)-10:]
 	}
-	base := fmt.Sprintf("%s-%s", profile, strings.ToLower(short))
+	base = fmt.Sprintf("%s-%s", profile, strings.ToLower(short))
 
-	names := make([]string, count)
+	names = make([]string, count)
 	for i := range names {
 		names[i] = fmt.Sprintf("%s-%d", base, i+1)
 	}
-	return names
+	return base, names
 }
 
 // runnerLabels combines the fixed "self-hosted" label every GitHub

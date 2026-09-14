@@ -48,9 +48,16 @@ type Job struct {
 	Profile       string       `dynamodbav:"profile,omitempty"`
 	Group         string       `dynamodbav:"group,omitempty"`
 
-	Status     JobStatus `dynamodbav:"status"`
-	RunnerID   string    `dynamodbav:"runner_id,omitempty"`
-	RetryCount int       `dynamodbav:"retry_count"`
+	Status   JobStatus `dynamodbav:"status"`
+	RunnerID string    `dynamodbav:"runner_id,omitempty"`
+	// SlotIndex is which of RunnerID's Slots (store.Runner.Slots) this job
+	// was bound to — set alongside RunnerID by both AllocateIdleRunner and
+	// BindToJob, and read back by handleCompleted to target the right slot
+	// in MarkIdle. Meaningful only when RunnerID is non-empty; index 0 is a
+	// legitimate value indistinguishable from "unset", which is fine since
+	// callers never consult it without first checking RunnerID != "".
+	SlotIndex  int `dynamodbav:"slot_index,omitempty"`
+	RetryCount int `dynamodbav:"retry_count"`
 
 	CreatedAt int64 `dynamodbav:"created_at"`
 	UpdatedAt int64 `dynamodbav:"updated_at"`

@@ -8,13 +8,13 @@ import "github.me/v2d27/github-runner-provisioner/internal/store"
 // service.go can log a clear warning when an incoming GitHub event implies a
 // transition that shouldn't be possible, instead of silently no-op'ing.
 //
-// See the RunnerStatus doc comment in internal/store/runner.go for why
-// PROVISIONING goes straight to BUSY rather than through a separate STARTING
-// state.
+// See the RunnerStatus doc comment in internal/store/runner.go: busy/idle is
+// a per-slot concept (store.Slot), not tracked by this outer instance-level
+// status — PROVISIONING goes straight to ACTIVE once the instance is up,
+// regardless of how many of its slots are currently busy vs idle.
 var validRunnerTransitions = map[store.RunnerStatus][]store.RunnerStatus{
-	store.RunnerProvisioning: {store.RunnerBusy, store.RunnerFailed, store.RunnerTerminating},
-	store.RunnerBusy:         {store.RunnerIdle, store.RunnerTerminating},
-	store.RunnerIdle:         {store.RunnerBusy, store.RunnerTerminating},
+	store.RunnerProvisioning: {store.RunnerActive, store.RunnerFailed, store.RunnerTerminating},
+	store.RunnerActive:       {store.RunnerTerminating},
 	store.RunnerTerminating:  {store.RunnerTerminated},
 }
 

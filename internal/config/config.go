@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -56,6 +57,10 @@ const (
 	// maxRunnerCount bounds how many GitHub Actions runner processes
 	// RenderUserData will install on a single instance.
 	maxRunnerCount = 2
+
+	// defaultAutoTerminatingTime is applied when runner.auto_terminating_time
+	// is left unset/zero.
+	defaultAutoTerminatingTime = time.Hour
 )
 
 // Config is the fully parsed, validated platform configuration.
@@ -88,12 +93,18 @@ type WebhookConfig struct {
 // grouped and reused. See docs/infrastructure/enterprise-standard-upgrade.md
 // sections 3-5.
 type RunnerConfig struct {
-	Scope        Scope              `yaml:"scope" json:"scope"`
-	Organization string             `yaml:"organization" json:"organization"`
-	Repository   string             `yaml:"repository" json:"repository"`
-	Group        string             `yaml:"group" json:"group"`
-	IdleTimeout  Duration           `yaml:"idle_timeout" json:"idle_timeout"`
-	Profiles     map[string]Profile `yaml:"profiles" json:"profiles"`
+	Scope        Scope    `yaml:"scope" json:"scope"`
+	Organization string   `yaml:"organization" json:"organization"`
+	Repository   string   `yaml:"repository" json:"repository"`
+	Group        string   `yaml:"group" json:"group"`
+	IdleTimeout  Duration `yaml:"idle_timeout" json:"idle_timeout"`
+	// AutoTerminatingTime is a hard cap on an instance's lifetime,
+	// independent of idle_timeout: once every runner slot on the instance is
+	// simultaneously free, if the instance itself is older than this it's
+	// terminated regardless of each slot's own idle clock (see
+	// internal/cleanup). Defaults to 1h when unset/zero.
+	AutoTerminatingTime Duration           `yaml:"auto_terminating_time,omitempty" json:"auto_terminating_time,omitempty"`
+	Profiles            map[string]Profile `yaml:"profiles" json:"profiles"`
 }
 
 // Profile maps a set of user-named workflow_job labels to a concrete EC2
@@ -242,6 +253,9 @@ func (c *Config) Validate() error {
 	if c.Runner.IdleTimeout.Duration() <= 0 {
 		errs = append(errs, "runner.idle_timeout must be greater than zero")
 	}
+	if c.Runner.AutoTerminatingTime.Duration() <= 0 {
+		errs = append(errs, "runner.auto_terminating_time must be greater than zero")
+	}
 
 	if len(c.Runner.Profiles) == 0 {
 		errs = append(errs, "runner.profiles must declare at least one profile")
@@ -257,8 +271,13 @@ func (c *Config) Validate() error {
 // applyDefaults fills in values that have a sensible default so Validate
 // doesn't need to treat them as required: a profile with no declared labels
 // defaults to a single label equal to its own map key, disk_size defaults to
-// defaultDiskSizeGB, and runner_count defaults to defaultRunnerCount.
+// defaultDiskSizeGB, runner_count defaults to defaultRunnerCount, and
+// runner.auto_terminating_time defaults to defaultAutoTerminatingTime.
 func (c *Config) applyDefaults() {
+	if c.Runner.AutoTerminatingTime.Duration() <= 0 {
+		c.Runner.AutoTerminatingTime = Duration(defaultAutoTerminatingTime)
+	}
+
 	for name, p := range c.Runner.Profiles {
 		changed := false
 		if len(p.Labels) == 0 {

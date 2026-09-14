@@ -36,19 +36,23 @@ func NewService(cfg *config.Config, st *store.Client, gh *ghclient.Provider, ec2
 }
 
 // RunScheduledSweep performs the three-minutely reconciliation: terminate
-// expired IDLE runners, and recover PROVISIONING orphans (runner and job
+// instances whose every runner slot is idle and eligible (see
+// eligibleForTermination), and recover PROVISIONING orphans (runner and job
 // side).
 func (s *Service) RunScheduledSweep(ctx context.Context) error {
 	now := time.Now()
 	var errs []error
 
-	expired, err := s.store.ListExpiredIdle(ctx, now)
+	active, err := s.store.ListActiveInstances(ctx)
 	if err != nil {
 		errs = append(errs, err)
 	}
-	for _, r := range expired {
+	for _, r := range active {
+		if !eligibleForTermination(r, now, s.cfg.Runner.AutoTerminatingTime.Duration()) {
+			continue
+		}
 		if err := s.terminateRunner(ctx, r); err != nil {
-			s.logger.Error("cleanup: terminate expired idle runner", "runner_id", r.RunnerID, "error", err)
+			s.logger.Error("cleanup: terminate expired instance", "runner_id", r.RunnerID, "error", err)
 			errs = append(errs, err)
 		}
 	}
@@ -150,21 +154,20 @@ func (s *Service) terminateRunner(ctx context.Context, r *store.Runner) error {
 		return err
 	}
 
-	// r.Names holds one GitHub registration per runner process the instance
+	// r.Slots holds one GitHub registration per runner process the instance
 	// was told to run (config.Profile.RunnerCount, 1-2) — every one of them
 	// must be deregistered, or the unremoved ones sit in GitHub's runner
 	// list forever (offline, unremovable by any later sweep once the
 	// instance and its DynamoDB row are both gone).
-	githubRunnerIDs := make([]int64, 0, len(r.Names))
-	for _, name := range r.Names {
-		ghRunner, err := ghclient.FindRunnerByName(ctx, client, s.cfg.Runner, name)
+	for i, slot := range r.Slots {
+		ghRunner, err := ghclient.FindRunnerByName(ctx, client, s.cfg.Runner, slot.Name)
 		switch {
 		case err == nil:
 			id := ghRunner.GetID()
 			if err := ghclient.RemoveRunner(ctx, client, s.cfg.Runner, id); err != nil {
 				return err
 			}
-			githubRunnerIDs = append(githubRunnerIDs, id)
+			r.Slots[i].GitHubRunnerID = id
 		case errors.Is(err, ghclient.ErrRunnerNotFound):
 			// Already deregistered (or never finished registering) — fine.
 		default:
@@ -178,9 +181,35 @@ func (s *Service) terminateRunner(ctx context.Context, r *store.Runner) error {
 		}
 	}
 
-	if err := s.store.MarkTerminated(ctx, r.RunnerID, githubRunnerIDs); err != nil {
+	if err := s.store.MarkTerminated(ctx, r.RunnerID, r.Slots); err != nil {
 		return err
 	}
-	s.logger.Info("cleanup: runner terminated", "runner_id", r.RunnerID, "instance_id", r.InstanceID, "github_runner_ids", githubRunnerIDs)
+	s.logger.Info("cleanup: runner terminated", "runner_id", r.RunnerID, "instance_id", r.InstanceID, "slots", len(r.Slots))
 	return nil
+}
+
+// eligibleForTermination reports whether every slot on r is currently idle,
+// and either every slot has individually passed its own idle_timeout
+// (TerminateAfter), or the instance itself has outlived
+// runner.auto_terminating_time regardless of any slot's own timer — see the
+// Runner/Slot doc comments in internal/store/runner.go.
+func eligibleForTermination(r *store.Runner, now time.Time, autoTerminatingTime time.Duration) bool {
+	if len(r.Slots) == 0 {
+		return false
+	}
+
+	allExpired := true
+	for _, s := range r.Slots {
+		if s.Status != store.SlotIdle {
+			return false // at least one slot still busy — never eligible
+		}
+		if s.TerminateAfter == 0 || now.Unix() < s.TerminateAfter {
+			allExpired = false
+		}
+	}
+	if allExpired {
+		return true
+	}
+
+	return now.Sub(time.Unix(r.CreatedAt, 0)) > autoTerminatingTime
 }

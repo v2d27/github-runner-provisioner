@@ -13,10 +13,13 @@
 // Three sparse GSIs, populated only by the item types/statuses that need
 // them:
 //
-//	GSI1 (allocation pool):     gsi1pk=POOL#<scope>#<owner>#<profile>#<group>, gsi1sk=<status>#<RFC3339 created/idle-since>
-//	                            — Runner only, statuses PROVISIONING/BUSY/IDLE.
+//	GSI1 (allocation pool):     gsi1pk=POOL#<scope>#<owner>#<profile>#<group>, gsi1sk=IDLE#<RFC3339 idle-since>
+//	                            — Runner only, present exactly while the instance has at least
+//	                              one IDLE runner slot (see Runner.Slots); absent otherwise.
 //	GSI2 (status timeline):     gsi2pk=RUNNER#STATUS#<status> or JOB#STATUS#<status>, gsi2sk=<unix seconds>
-//	                            — Runner PROVISIONING/IDLE (cleanup's expiry + stuck sweeps),
+//	                            — Runner PROVISIONING only (cleanup's stuck-provisioning sweep;
+//	                              the per-slot-idle/auto_terminating_time sweep instead scans
+//	                              ACTIVE instances directly — see ListActiveInstances),
 //	                              Job QUEUED/PROVISIONING (defense-in-depth sweep).
 //	GSI3 (instance lookup):     gsi3pk=INSTANCE#<instance_id>, gsi3sk=STATE
 //	                            — Runner only, once instance_id is known.

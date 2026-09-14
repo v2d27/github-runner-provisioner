@@ -132,8 +132,12 @@ func (s *Service) handleInProgress(ctx context.Context, ev Event) error {
 	if err != nil {
 		return err
 	}
-	if runner.Status != store.RunnerBusy {
-		s.logger.Warn("runner: in_progress but runner not BUSY", "job_id", ev.JobID, "runner_id", runner.RunnerID, "status", runner.Status)
+	if job.SlotIndex < 0 || job.SlotIndex >= len(runner.Slots) {
+		s.logger.Warn("runner: in_progress but job's slot_index is out of range", "job_id", ev.JobID, "runner_id", runner.RunnerID, "slot_index", job.SlotIndex, "slot_count", len(runner.Slots))
+		return nil
+	}
+	if runner.Slots[job.SlotIndex].Status != store.SlotBusy {
+		s.logger.Warn("runner: in_progress but slot not BUSY", "job_id", ev.JobID, "runner_id", runner.RunnerID, "slot_index", job.SlotIndex, "status", runner.Slots[job.SlotIndex].Status)
 	}
 	return nil
 }
@@ -154,9 +158,10 @@ func (s *Service) handleCompleted(ctx context.Context, ev Event) error {
 	if job.RunnerID == "" {
 		return nil // job was ignored/never allocated, nothing to free
 	}
-	if err := s.store.MarkIdle(ctx, job.RunnerID, s.cfg.Runner.IdleTimeout.Duration()); err != nil {
+	sel := s.poolSelector(job.Profile)
+	if err := s.store.MarkIdle(ctx, job.RunnerID, job.SlotIndex, sel, s.cfg.Runner.IdleTimeout.Duration()); err != nil {
 		return err
 	}
-	s.logger.Info("runner: job completed, runner idle", "job_id", ev.JobID, "runner_id", job.RunnerID, "idle_timeout", s.cfg.Runner.IdleTimeout.String())
+	s.logger.Info("runner: job completed, slot idle", "job_id", ev.JobID, "runner_id", job.RunnerID, "slot_index", job.SlotIndex, "idle_timeout", s.cfg.Runner.IdleTimeout.String())
 	return nil
 }
