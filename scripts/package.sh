@@ -6,7 +6,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-FUNCTIONS=(webhook provision cleanup)
+FUNCTIONS=(webhook provision cleanup ready)
 
 for name in "${FUNCTIONS[@]}"; do
   bootstrap="lambda/${name}/bootstrap"

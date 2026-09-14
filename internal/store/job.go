@@ -30,9 +30,6 @@ const (
 // given up on as FAILED.
 const maxProvisionAttempts = 3
 
-// completedJobTTL bounds how long a terminal Job record survives.
-const completedJobTTL = 48 * time.Hour
-
 // Job is one GitHub Actions workflow_job as tracked by this platform.
 type Job struct {
 	PK         string `dynamodbav:"pk"`
@@ -185,12 +182,13 @@ func (c *Client) RevertProvisioning(ctx context.Context, job *Job) error {
 				"pk": &types.AttributeValueMemberS{Value: jobPK(job.JobID)},
 				"sk": &types.AttributeValueMemberS{Value: stateSK},
 			},
-			UpdateExpression:         aws.String("SET #status = :failed, retry_count = :retries, updated_at = :now REMOVE gsi2pk, gsi2sk"),
-			ExpressionAttributeNames: map[string]string{"#status": "status"},
+			UpdateExpression:         aws.String("SET #status = :failed, retry_count = :retries, updated_at = :now, #ttl = :ttl REMOVE gsi2pk, gsi2sk"),
+			ExpressionAttributeNames: map[string]string{"#status": "status", "#ttl": "ttl"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":failed":  &types.AttributeValueMemberS{Value: string(JobFailed)},
 				":retries": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.RetryCount+1)},
 				":now":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now)},
+				":ttl":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(c.recordTTL).Unix())},
 			},
 		})
 		if err != nil {
@@ -214,6 +212,61 @@ func (c *Client) RevertProvisioning(ctx context.Context, job *Job) error {
 			":retries":      &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.RetryCount+1)},
 			":now":          &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now)},
 			":gsi2pk":       &types.AttributeValueMemberS{Value: jobStatusGSI2PK(JobQueued)},
+		},
+	})
+	if err != nil && !isConditionalCheckFailed(err) {
+		return fmt.Errorf("store: revert job %d to queued: %w", job.JobID, err)
+	}
+	return nil
+}
+
+// RevertAllocation is called when a job's bound runner never came up — its
+// slot sat STARTING past runner.boot_timeout without its ready callback ever
+// arriving (see internal/cleanup.reconcileStuckStarting and
+// store.MarkSlotReady). The runner side is already handled by the caller
+// (the instance gets terminated); this only has to give the job itself back
+// to QUEUED — clearing the runner_id/slot_index that no longer mean
+// anything — for a fresh allocation attempt, or FAILED once retries are
+// exhausted (same budget as RevertProvisioning).
+func (c *Client) RevertAllocation(ctx context.Context, job *Job) error {
+	now := time.Now().Unix()
+	if job.RetryCount+1 >= maxProvisionAttempts {
+		_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: jobPK(job.JobID)},
+				"sk": &types.AttributeValueMemberS{Value: stateSK},
+			},
+			UpdateExpression:         aws.String("SET #status = :failed, retry_count = :retries, updated_at = :now, #ttl = :ttl REMOVE gsi2pk, gsi2sk, runner_id, slot_index"),
+			ExpressionAttributeNames: map[string]string{"#status": "status", "#ttl": "ttl"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":failed":  &types.AttributeValueMemberS{Value: string(JobFailed)},
+				":retries": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.RetryCount+1)},
+				":now":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now)},
+				":ttl":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(c.recordTTL).Unix())},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("store: fail job %d: %w", job.JobID, err)
+		}
+		return nil
+	}
+
+	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: jobPK(job.JobID)},
+			"sk": &types.AttributeValueMemberS{Value: stateSK},
+		},
+		ConditionExpression:      aws.String("#status = :allocated"),
+		UpdateExpression:         aws.String("SET #status = :queued, retry_count = :retries, updated_at = :now, gsi2pk = :gsi2pk, gsi2sk = :now REMOVE runner_id, slot_index"),
+		ExpressionAttributeNames: map[string]string{"#status": "status"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":allocated": &types.AttributeValueMemberS{Value: string(JobAllocated)},
+			":queued":    &types.AttributeValueMemberS{Value: string(JobQueued)},
+			":retries":   &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.RetryCount+1)},
+			":now":       &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now)},
+			":gsi2pk":    &types.AttributeValueMemberS{Value: jobStatusGSI2PK(JobQueued)},
 		},
 	})
 	if err != nil && !isConditionalCheckFailed(err) {
@@ -267,7 +320,7 @@ func (c *Client) MarkCompleted(ctx context.Context, jobID int64) error {
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":completed": &types.AttributeValueMemberS{Value: string(JobCompleted)},
 			":now":       &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Unix())},
-			":ttl":       &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(completedJobTTL).Unix())},
+			":ttl":       &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(c.recordTTL).Unix())},
 		},
 	})
 	if err != nil {
@@ -285,7 +338,7 @@ func (c *Client) MarkIgnored(ctx context.Context, job *Job) error {
 		return fmt.Errorf("store: marshal ignored job: %w", err)
 	}
 	item["status"] = &types.AttributeValueMemberS{Value: string(JobIgnored)}
-	item["ttl"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(completedJobTTL).Unix())}
+	item["ttl"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(c.recordTTL).Unix())}
 	delete(item, "gsi2pk")
 	delete(item, "gsi2sk")
 	_, err = c.ddb.PutItem(ctx, &dynamodb.PutItemInput{

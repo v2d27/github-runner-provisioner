@@ -85,6 +85,12 @@ variable "dynamodb_point_in_time_recovery_enabled" {
   default = true
 }
 
+variable "dynamodb_ttl_days" {
+  type        = number
+  default     = 3
+  description = "How long a TTL-bearing item (terminated/failed runners, completed/failed/ignored jobs, webhook delivery-dedupe records, cached GitHub installation ID) survives before DynamoDB's own TTL sweep reclaims it — one shared setting for every item type, passed to every Lambda as DYNAMODB_TTL_DAYS."
+}
+
 variable "webhook_lambda_timeout" {
   type    = number
   default = 10
@@ -98,6 +104,11 @@ variable "provision_lambda_timeout" {
 variable "cleanup_lambda_timeout" {
   type    = number
   default = 60
+}
+
+variable "ready_lambda_timeout" {
+  type    = number
+  default = 10
 }
 
 variable "sqs_max_receive_count" {
@@ -118,8 +129,9 @@ variable "enable_spot_interruption_rule" {
 }
 
 variable "log_retention_in_days" {
-  type    = number
-  default = 30
+  type        = number
+  default     = 3
+  description = "CloudWatch Logs retention, applied to every Lambda's and the API Gateway's log group alike — one shared setting."
 }
 
 variable "tags" {

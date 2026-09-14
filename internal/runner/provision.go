@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -42,10 +44,15 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 	}
 
 	runnerID := store.NewRunnerID()
+	readyToken, err := newReadyToken()
+	if err != nil {
+		s.revertProvisioning(ctx, job)
+		return fmt.Errorf("runner: generate ready token: %w", err)
+	}
 	base, names := runnerNames(sel.Profile, runnerID, profile.RunnerCount)
 	labels := runnerLabels(profile.Labels)
 
-	runnerRow := store.NewProvisioningRunner(sel, runnerID, names, labels, profile.Architecture, profile.InstanceType, imageID)
+	runnerRow := store.NewProvisioningRunner(sel, runnerID, names, labels, profile.Architecture, profile.InstanceType, imageID, readyToken)
 	if err := s.store.CreateProvisioning(ctx, runnerRow); err != nil {
 		s.revertProvisioning(ctx, job)
 		return fmt.Errorf("runner: create provisioning row: %w", err)
@@ -62,6 +69,9 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 		Labels:             labels,
 		Group:              s.cfg.Runner.Group,
 		Architecture:       profile.Architecture,
+		RunnerID:           runnerID,
+		ReadyToken:         readyToken,
+		ReadyCallbackURL:   s.readyCallbackURL,
 	})
 
 	instanceID, err := s.ec2.RunInstance(ctx, aws.LaunchInput{
@@ -120,6 +130,17 @@ func (s *Service) revertProvisioning(ctx context.Context, job *store.Job) {
 	if err := s.store.RevertProvisioning(ctx, job); err != nil {
 		s.logger.Error("runner: revert provisioning claim", "job_id", job.JobID, "error", err)
 	}
+}
+
+// newReadyToken generates the random secret the runner-ready callback (see
+// internal/ready) authenticates with — one per runner, handed to the
+// instance via UserData and compared against store.Runner.ReadyToken.
+func newReadyToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // runnerNames returns the instance's bare base name (used for the EC2 Name

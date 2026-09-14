@@ -49,10 +49,6 @@ const (
 // than reflecting a per-row status.
 const idlePoolPrefix = "IDLE"
 
-// terminatedTTL bounds how long a TERMINATED/FAILED runner record survives —
-// long enough for post-mortem debugging, short enough to keep the table lean.
-const terminatedTTL = 7 * 24 * time.Hour
-
 // Slot is one GitHub-registered runner process on a shared EC2 instance.
 // Every slot is allocated, freed and idle-timed out independently of its
 // siblings — an instance is only terminated once every slot is
@@ -70,6 +66,15 @@ type Slot struct {
 
 	JobID         int64 `dynamodbav:"job_id,omitempty"`
 	WorkflowRunID int64 `dynamodbav:"workflow_run_id,omitempty"`
+
+	// StartingSince is set by BindToJob the moment the slot is created,
+	// independent of its Busy/Idle status, and removed once MarkSlotReady's
+	// runner-ready callback confirms the runner process actually came up.
+	// Left uncleared past runner.boot_timeout, cleanup's boot-timeout sweep
+	// (reconcileStuckStarting) treats the instance as a failed boot. Once
+	// cleared it is never set again, so a slot's later busy/idle churn (real
+	// jobs) is never mistaken for a still-booting one.
+	StartingSince int64 `dynamodbav:"starting_since,omitempty"`
 
 	IdleSince      int64 `dynamodbav:"idle_since,omitempty"`
 	TerminateAfter int64 `dynamodbav:"terminate_after,omitempty"`
@@ -97,6 +102,13 @@ type Runner struct {
 	InstanceID   string `dynamodbav:"instance_id,omitempty"`
 	InstanceType string `dynamodbav:"instance_type"`
 	AMI          string `dynamodbav:"ami"`
+
+	// ReadyToken authenticates the runner-ready callback (cmd/ready,
+	// MarkSlotReady): a random secret generated at provisioning time and
+	// handed to the instance via UserData — the same trust model already
+	// used for GitHub registration tokens, so the instance never needs any
+	// broader AWS credential just to report its own readiness.
+	ReadyToken string `dynamodbav:"ready_token"`
 
 	Status RunnerStatus `dynamodbav:"status"`
 
@@ -126,8 +138,10 @@ func NewRunnerID() string {
 // one entry per runner process the instance will install (config.Profile.
 // RunnerCount); every slot starts BUSY (a placeholder — see SlotBusy) since
 // none are allocatable until BindToJob promotes the non-triggering ones to
-// IDLE once the instance is confirmed launched.
-func NewProvisioningRunner(sel PoolSelector, runnerID string, names []string, labels []string, architecture, instanceType, ami string) *Runner {
+// IDLE once the instance is confirmed launched. readyToken is the
+// runner-ready callback's shared secret (see MarkSlotReady), generated fresh
+// per runner and handed to the instance via UserData.
+func NewProvisioningRunner(sel PoolSelector, runnerID string, names []string, labels []string, architecture, instanceType, ami, readyToken string) *Runner {
 	now := time.Now().Unix()
 
 	slots := make([]Slot, len(names))
@@ -150,6 +164,7 @@ func NewProvisioningRunner(sel PoolSelector, runnerID string, names []string, la
 		Architecture: architecture,
 		InstanceType: instanceType,
 		AMI:          ami,
+		ReadyToken:   readyToken,
 		Status:       RunnerProvisioning,
 		CreatedAt:    now,
 		GSI2PK:       runnerStatusGSI2PK(RunnerProvisioning),
@@ -214,13 +229,24 @@ func (c *Client) SetInstanceID(ctx context.Context, runnerID, instanceID string)
 // Any other slot (runnerCount > 1) is promoted straight to IDLE with its own
 // idle_timeout clock starting now, and the pool's GSI1 entry is populated —
 // making it immediately reusable by a different, concurrently queued job of
-// the same profile, without waiting for a whole new instance.
+// the same profile, without waiting for a whole new instance, and without
+// waiting for the instance to actually finish booting: reusing a slot that's
+// about to be ready is never worse than launching a whole new instance,
+// which would take just as long to boot from scratch.
+//
+// Every slot also gets starting_since = now, independent of its Busy/Idle
+// status — the "this slot's process hasn't confirmed itself yet" marker
+// MarkSlotReady clears once its runner-ready callback arrives. It's what
+// lets cleanup's boot-timeout sweep (reconcileStuckStarting) tell a slot
+// whose install genuinely failed apart from one that's simply busy or idle
+// as normal, without gating allocability on it.
 func (c *Client) BindToJob(ctx context.Context, runnerID string, jobID, workflowRunID int64, sel PoolSelector, runnerCount int, idleTimeout time.Duration) error {
 	now := time.Now()
 
 	setClauses := []string{
 		"#status = :active",
 		"slots[0].#status = :busy",
+		"slots[0].starting_since = :now",
 		"slots[0].job_id = :jobID",
 		"slots[0].workflow_run_id = :wfID",
 	}
@@ -229,6 +255,7 @@ func (c *Client) BindToJob(ctx context.Context, runnerID string, jobID, workflow
 		":provisioning": &types.AttributeValueMemberS{Value: string(RunnerProvisioning)},
 		":active":       &types.AttributeValueMemberS{Value: string(RunnerActive)},
 		":busy":         &types.AttributeValueMemberS{Value: string(SlotBusy)},
+		":now":          &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now.Unix())},
 		":jobID":        &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", jobID)},
 		":wfID":         &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", workflowRunID)},
 	}
@@ -246,6 +273,7 @@ func (c *Client) BindToJob(ctx context.Context, runnerID string, jobID, workflow
 				fmt.Sprintf("slots[%d].#status = :idleSlot", i),
 				fmt.Sprintf("slots[%d].idle_since = :idleSince", i),
 				fmt.Sprintf("slots[%d].terminate_after = :term", i),
+				fmt.Sprintf("slots[%d].starting_since = :now", i),
 			)
 		}
 	}
@@ -290,6 +318,36 @@ func (c *Client) BindToJob(ctx context.Context, runnerID string, jobID, workflow
 	})
 	if err != nil {
 		return fmt.Errorf("store: bind runner %s to job %d: %w", runnerID, jobID, err)
+	}
+	return nil
+}
+
+// MarkSlotReady confirms that slot slotIndex's runner process actually
+// registered with GitHub and started — called by cmd/ready once the
+// instance's userdata script's own callback arrives (see internal/ready and
+// the ReadyToken doc comment on Runner). It only clears the starting_since
+// marker BindToJob set; it never touches the slot's Busy/Idle status, GSI1
+// membership, job binding, etc. — those were already correct the instant
+// BindToJob ran, since a fast-following job may already have claimed this
+// exact slot via AllocateIdleRunner before its boot even finished (see
+// BindToJob). Once cleared, starting_since is never set again for this
+// slot's lifetime — its ongoing busy/idle churn afterward is real work, not
+// something this method needs to know about.
+//
+// A ConditionalCheckFailed (starting_since already cleared, e.g. a retried
+// callback) is swallowed, not an error.
+func (c *Client) MarkSlotReady(ctx context.Context, runnerID string, slotIndex int) error {
+	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: runnerPK(runnerID)},
+			"sk": &types.AttributeValueMemberS{Value: stateSK},
+		},
+		ConditionExpression: aws.String(fmt.Sprintf("attribute_exists(slots[%d].starting_since)", slotIndex)),
+		UpdateExpression:    aws.String(fmt.Sprintf("REMOVE slots[%d].starting_since", slotIndex)),
+	})
+	if err != nil && !isConditionalCheckFailed(err) {
+		return fmt.Errorf("store: mark runner %s slot %d ready: %w", runnerID, slotIndex, err)
 	}
 	return nil
 }
@@ -618,7 +676,7 @@ func (c *Client) MarkRunnerFailed(ctx context.Context, runnerID string) error {
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":failed": &types.AttributeValueMemberS{Value: string(RunnerFailed)},
-			":ttl":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(terminatedTTL).Unix())},
+			":ttl":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(c.recordTTL).Unix())},
 		},
 	})
 	if err != nil {
@@ -652,7 +710,7 @@ func (c *Client) MarkTerminated(ctx context.Context, runnerID string, slots []Sl
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":terminated": &types.AttributeValueMemberS{Value: string(RunnerTerminated)},
 			":slots":      slotsAV,
-			":ttl":        &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(terminatedTTL).Unix())},
+			":ttl":        &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(c.recordTTL).Unix())},
 		},
 	})
 	if err != nil {

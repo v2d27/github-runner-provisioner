@@ -10,13 +10,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-// installationIDCacheKey and its TTL. A resolved installation ID rarely
-// changes, but a short TTL lets a re-installed/reconfigured GitHub App
-// self-heal without a code change.
-const (
-	installationIDCacheKey = "installation_id"
-	installationIDCacheTTL = 12 * time.Hour
-)
+// installationIDCacheKey is the fixed pk this cache entry lives at. A
+// resolved installation ID rarely changes, but letting it expire (via
+// c.recordTTL — the same shared knob as every other TTL'd item type, see
+// infrastructure.main.dynamodb_ttl_days) lets a re-installed/reconfigured
+// GitHub App self-heal without a code change, just on a slower cadence than
+// this cache-freshness use case alone would otherwise call for.
+const installationIDCacheKey = "installation_id"
 
 // GetInstallationID implements github.InstallationCache, letting the
 // resolved installation ID survive across Lambda cold starts instead of
@@ -56,7 +56,7 @@ func (c *Client) PutInstallationID(ctx context.Context, id int64) error {
 			"sk":          &types.AttributeValueMemberS{Value: stateSK},
 			"entity_type": &types.AttributeValueMemberS{Value: "CONFIG"},
 			"value":       &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", id)},
-			"ttl":         &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(installationIDCacheTTL).Unix())},
+			"ttl":         &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(c.recordTTL).Unix())},
 		},
 	})
 	if err != nil {

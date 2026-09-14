@@ -10,7 +10,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-FUNCTIONS=(webhook provision cleanup)
+FUNCTIONS=(webhook provision cleanup ready)
 GOARCH="${GOARCH:-arm64}" # must match infrastructure/modules/lambda's `architecture` variable
 
 for name in "${FUNCTIONS[@]}"; do

@@ -32,7 +32,10 @@ func IsValidRunnerTransition(from, to store.RunnerStatus) bool {
 var validJobTransitions = map[store.JobStatus][]store.JobStatus{
 	store.JobQueued:       {store.JobAllocated, store.JobProvisioning, store.JobIgnored},
 	store.JobProvisioning: {store.JobAllocated, store.JobQueued, store.JobFailed},
-	store.JobAllocated:    {store.JobCompleted},
+	// QUEUED/FAILED here is RevertAllocation: the runner this job was bound
+	// to never confirmed ready within runner.boot_timeout (see
+	// internal/cleanup.reconcileStuckStarting).
+	store.JobAllocated: {store.JobCompleted, store.JobQueued, store.JobFailed},
 }
 
 // IsValidJobTransition reports whether moving a job from `from` to `to` is

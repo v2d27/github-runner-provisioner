@@ -55,12 +55,22 @@ var ErrNotFound = errors.New("store: not found")
 type Client struct {
 	ddb   *dynamodb.Client
 	table string
+	// recordTTL bounds how long every TTL-bearing item this platform writes
+	// survives before DynamoDB's own TTL sweep reclaims it (see dynamodb.tf's
+	// `ttl` block, which just names the attribute and turns the feature on —
+	// the actual duration lives here). One knob for every item type
+	// (terminated/failed runners, completed/failed/ignored jobs, webhook
+	// delivery-dedup records, and the cached GitHub installation ID) rather
+	// than a separately tuned duration per type, set via
+	// configs/runner.yaml's infrastructure.main.dynamodb_ttl_days.
+	recordTTL time.Duration
 }
 
-// New builds a store Client for the given table name (from Terraform output,
-// passed to each Lambda as an environment variable).
-func New(cfg aws.Config, tableName string) *Client {
-	return &Client{ddb: dynamodb.NewFromConfig(cfg), table: tableName}
+// New builds a store Client for the given table name (from Terraform output)
+// and record TTL (infrastructure.main.dynamodb_ttl_days) — both passed to
+// each Lambda as environment variables.
+func New(cfg aws.Config, tableName string, recordTTL time.Duration) *Client {
+	return &Client{ddb: dynamodb.NewFromConfig(cfg), table: tableName, recordTTL: recordTTL}
 }
 
 func runnerPK(runnerID string) string  { return "RUNNER#" + runnerID }

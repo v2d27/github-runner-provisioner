@@ -38,11 +38,16 @@ type Service struct {
 	ec2              *aws.EC2
 	ami              *aws.AMIResolver
 	launchTemplateID string
+	// readyCallbackURL is the runner-ready endpoint (internal/ready, fronted
+	// by the same API Gateway as the webhook) every provisioned instance is
+	// told to call back via UserData once each of its runner processes
+	// registers with GitHub and starts. See store.MarkSlotReady.
+	readyCallbackURL string
 	logger           *slog.Logger
 }
 
-func NewService(cfg *config.Config, st *store.Client, gh *ghclient.Provider, ec2 *aws.EC2, ami *aws.AMIResolver, launchTemplateID string, logger *slog.Logger) *Service {
-	return &Service{cfg: cfg, store: st, github: gh, ec2: ec2, ami: ami, launchTemplateID: launchTemplateID, logger: logger}
+func NewService(cfg *config.Config, st *store.Client, gh *ghclient.Provider, ec2 *aws.EC2, ami *aws.AMIResolver, launchTemplateID, readyCallbackURL string, logger *slog.Logger) *Service {
+	return &Service{cfg: cfg, store: st, github: gh, ec2: ec2, ami: ami, launchTemplateID: launchTemplateID, readyCallbackURL: readyCallbackURL, logger: logger}
 }
 
 // Handle processes one normalized workflow_job event.

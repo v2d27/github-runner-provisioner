@@ -127,6 +127,35 @@ resource "aws_iam_role_policy" "provision" {
 }
 
 # ---------------------------------------------------------------------------
+# ready: confirms a runner slot actually registered with GitHub and started
+# (the runner-ready callback instances call back via UserData).
+# ---------------------------------------------------------------------------
+resource "aws_iam_role" "ready" {
+  name               = "${local.name_prefix}-ready"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+  tags               = var.tags
+}
+
+data "aws_iam_policy_document" "ready" {
+  statement {
+    sid       = "Logging"
+    actions   = data.aws_iam_policy_document.basic_logging.statement[0].actions
+    resources = data.aws_iam_policy_document.basic_logging.statement[0].resources
+  }
+  statement {
+    sid       = "ConfirmRunnerSlot"
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.this.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ready" {
+  name   = "${local.name_prefix}-ready"
+  role   = aws_iam_role.ready.id
+  policy = data.aws_iam_policy_document.ready.json
+}
+
+# ---------------------------------------------------------------------------
 # cleanup: expire idle runners, reconcile orphans, react to spot interruption.
 # ---------------------------------------------------------------------------
 resource "aws_iam_role" "cleanup" {
@@ -152,6 +181,12 @@ data "aws_iam_policy_document" "cleanup" {
       "dynamodb:GetItem",
       "dynamodb:UpdateItem",
       "dynamodb:Query",
+      # ListActiveInstances (internal/store/runner.go) scans the base table
+      # directly rather than a GSI — see that function's own doc comment for
+      # why a Scan is the deliberate choice here. Without this action, every
+      # scheduled sweep fails outright before it can expire a single idle
+      # runner or catch a stuck boot.
+      "dynamodb:Scan",
     ]
     resources = concat([aws_dynamodb_table.this.arn], local.dynamodb_gsi_arns)
   }

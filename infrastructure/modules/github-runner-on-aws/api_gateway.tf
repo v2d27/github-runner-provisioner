@@ -17,6 +17,19 @@ resource "aws_apigatewayv2_route" "webhook" {
   target    = "integrations/${aws_apigatewayv2_integration.webhook.id}"
 }
 
+resource "aws_apigatewayv2_integration" "ready" {
+  api_id                 = aws_apigatewayv2_api.this.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.ready.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "ready" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "POST /runner-ready"
+  target    = "integrations/${aws_apigatewayv2_integration.ready.id}"
+}
+
 resource "aws_cloudwatch_log_group" "api_gateway_access_logs" {
   name              = "/aws/apigateway/${local.name_prefix}-webhook"
   retention_in_days = var.log_retention_in_days

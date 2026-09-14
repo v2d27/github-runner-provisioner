@@ -3,6 +3,11 @@ output "webhook_url" {
   value       = "${aws_apigatewayv2_stage.default.invoke_url}webhook"
 }
 
+output "ready_callback_url" {
+  description = "The runner-ready callback URL baked into every instance's UserData — for reference/debugging only, not something you configure by hand."
+  value       = local.ready_callback_url
+}
+
 output "dynamodb_table_name" {
   value = aws_dynamodb_table.this.name
 }

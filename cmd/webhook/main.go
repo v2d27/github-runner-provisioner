@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -47,7 +49,7 @@ func init() {
 		os.Exit(1)
 	}
 
-	st := store.New(awsCfg, mustEnv("DYNAMODB_TABLE_NAME"))
+	st := store.New(awsCfg, mustEnv("DYNAMODB_TABLE_NAME"), mustEnvDays("DYNAMODB_TTL_DAYS"))
 	queue := webhook.NewQueue(awsCfg, mustEnv("QUEUE_URL"))
 
 	handler = webhook.NewHandler([]byte(secretValue), st, queue, logger)
@@ -81,6 +83,18 @@ func mustEnv(name string) string {
 		os.Exit(1)
 	}
 	return v
+}
+
+// mustEnvDays parses an environment variable holding a whole number of days
+// (e.g. DYNAMODB_TTL_DAYS, from infrastructure.main.dynamodb_ttl_days) into
+// a time.Duration.
+func mustEnvDays(name string) time.Duration {
+	days, err := strconv.Atoi(mustEnv(name))
+	if err != nil {
+		logger.Error("webhook: parse environment variable as days", "name", name, "error", err)
+		os.Exit(1)
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 func main() {

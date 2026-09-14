@@ -61,6 +61,13 @@ const (
 	// defaultAutoTerminatingTime is applied when runner.auto_terminating_time
 	// is left unset/zero.
 	defaultAutoTerminatingTime = time.Hour
+
+	// defaultBootTimeout is applied when runner.boot_timeout is left
+	// unset/zero — comfortably longer than the couple of minutes this
+	// platform's AMIs need to boot and register a runner process (see
+	// internal/runner.RenderUserData), so a slow but healthy boot is never
+	// mistaken for a failed one.
+	defaultBootTimeout = 10 * time.Minute
 )
 
 // Config is the fully parsed, validated platform configuration.
@@ -103,8 +110,15 @@ type RunnerConfig struct {
 	// simultaneously free, if the instance itself is older than this it's
 	// terminated regardless of each slot's own idle clock (see
 	// internal/cleanup). Defaults to 1h when unset/zero.
-	AutoTerminatingTime Duration           `yaml:"auto_terminating_time,omitempty" json:"auto_terminating_time,omitempty"`
-	Profiles            map[string]Profile `yaml:"profiles" json:"profiles"`
+	AutoTerminatingTime Duration `yaml:"auto_terminating_time,omitempty" json:"auto_terminating_time,omitempty"`
+	// BootTimeout bounds how long a runner slot may sit STARTING — EC2
+	// launched, but its runner process hasn't yet confirmed it registered
+	// with GitHub (see store.MarkSlotReady, internal/ready) — before
+	// internal/cleanup treats it as a failed boot: the instance is
+	// terminated and any job bound to it is reverted to QUEUED for a fresh
+	// attempt. Defaults to 10m when unset.
+	BootTimeout Duration           `yaml:"boot_timeout,omitempty" json:"boot_timeout,omitempty"`
+	Profiles    map[string]Profile `yaml:"profiles" json:"profiles"`
 }
 
 // Profile maps a set of user-named workflow_job labels to a concrete EC2
@@ -256,6 +270,9 @@ func (c *Config) Validate() error {
 	if c.Runner.AutoTerminatingTime.Duration() <= 0 {
 		errs = append(errs, "runner.auto_terminating_time must be greater than zero")
 	}
+	if c.Runner.BootTimeout.Duration() <= 0 {
+		errs = append(errs, "runner.boot_timeout must be greater than zero")
+	}
 
 	if len(c.Runner.Profiles) == 0 {
 		errs = append(errs, "runner.profiles must declare at least one profile")
@@ -271,11 +288,15 @@ func (c *Config) Validate() error {
 // applyDefaults fills in values that have a sensible default so Validate
 // doesn't need to treat them as required: a profile with no declared labels
 // defaults to a single label equal to its own map key, disk_size defaults to
-// defaultDiskSizeGB, runner_count defaults to defaultRunnerCount, and
-// runner.auto_terminating_time defaults to defaultAutoTerminatingTime.
+// defaultDiskSizeGB, runner_count defaults to defaultRunnerCount,
+// runner.auto_terminating_time defaults to defaultAutoTerminatingTime, and
+// runner.boot_timeout defaults to defaultBootTimeout.
 func (c *Config) applyDefaults() {
 	if c.Runner.AutoTerminatingTime.Duration() <= 0 {
 		c.Runner.AutoTerminatingTime = Duration(defaultAutoTerminatingTime)
+	}
+	if c.Runner.BootTimeout.Duration() <= 0 {
+		c.Runner.BootTimeout = Duration(defaultBootTimeout)
 	}
 
 	for name, p := range c.Runner.Profiles {

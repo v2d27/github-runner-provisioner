@@ -32,6 +32,16 @@ type UserDataParams struct {
 	Labels       []string
 	Group        string // empty = GitHub default group
 	Architecture string // "x86_64" | "arm64"
+
+	// RunnerID, ReadyToken and ReadyCallbackURL together let each installed
+	// runner process notify internal/ready once it has registered with
+	// GitHub and started — see store.MarkSlotReady. ReadyToken is compared
+	// against store.Runner.ReadyToken; it is this platform's only means of
+	// authenticating the callback, so the instance never needs a broader AWS
+	// credential just to report its own readiness.
+	RunnerID         string
+	ReadyToken       string
+	ReadyCallbackURL string
 }
 
 func (p UserDataParams) url() string {
@@ -119,6 +129,15 @@ curl -fsSL -o /tmp/actions-runner.tar.gz \
 		user := fmt.Sprintf("github-runner-%d", i+1)
 		home := fmt.Sprintf("/opt/actions-runner-%d", i+1)
 
+		// Sent once config.sh (registration) and svc.sh start have both
+		// succeeded — set -euxo pipefail above means the script already
+		// aborted before reaching here if either failed, so a callback
+		// firing at all is itself proof this runner process is live. A
+		// failed callback (network hiccup, etc.) must not abort the rest of
+		// the script — the `|| echo` keeps `set -e` from tripping — cleanup's
+		// boot-timeout sweep is the backstop if the slot never confirms.
+		readyBody := fmt.Sprintf(`{"runner_id":%q,"slot_index":%d,"token":%q}`, p.RunnerID, i, p.ReadyToken)
+
 		fmt.Fprintf(&script, `
 RUNNER_USER=%q
 RUNNER_HOME=%q
@@ -143,7 +162,13 @@ sudo -u "$RUNNER_USER" -- "$RUNNER_HOME"/config.sh \
 cd "$RUNNER_HOME"
 ./svc.sh install "$RUNNER_USER"
 ./svc.sh start
-`, user, home, url, p.RegistrationTokens[i], p.RunnerNames[i], labels, runnerGroupFlag)
+
+curl -fsS --retry 5 --retry-delay 3 --max-time 10 \
+  -X POST %q \
+  -H 'Content-Type: application/json' \
+  -d '%s' \
+  || echo "warning: runner-ready callback failed for slot %d" >&2
+`, user, home, url, p.RegistrationTokens[i], p.RunnerNames[i], labels, runnerGroupFlag, p.ReadyCallbackURL, readyBody, i)
 	}
 
 	return script.String()

@@ -65,6 +65,7 @@ resource "aws_lambda_function" "provision" {
   environment {
     variables = merge(local.common_environment, {
       LAUNCH_TEMPLATE_ID = aws_launch_template.runner.id
+      READY_CALLBACK_URL = local.ready_callback_url
     })
   }
 
@@ -82,6 +83,42 @@ resource "aws_lambda_event_source_mapping" "provision_sqs" {
   # allocation protocol means we'd rather redeliver one bad message than ten
   # good ones.
   function_response_types = ["ReportBatchItemFailures"]
+}
+
+# --- ready -----------------------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "ready" {
+  name              = "/aws/lambda/${local.name_prefix}-ready"
+  retention_in_days = var.log_retention_in_days
+  tags              = var.tags
+}
+
+resource "aws_lambda_function" "ready" {
+  function_name    = "${local.name_prefix}-ready"
+  description      = "Confirms a runner slot registered with GitHub and started."
+  filename         = "${var.build_dir}/ready.zip"
+  source_code_hash = filebase64sha256("${var.build_dir}/ready.zip")
+  handler          = "bootstrap"
+  runtime          = "provided.al2023"
+  architectures    = ["arm64"]
+  role             = aws_iam_role.ready.arn
+  timeout          = var.ready_lambda_timeout
+  memory_size      = 128
+
+  environment {
+    variables = local.common_environment
+  }
+
+  tags       = var.tags
+  depends_on = [aws_cloudwatch_log_group.ready]
+}
+
+resource "aws_lambda_permission" "apigw_ready" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ready.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.this.execution_arn}/*/*"
 }
 
 # --- cleanup -----------------------------------------------------------------

@@ -37,8 +37,9 @@ func NewService(cfg *config.Config, st *store.Client, gh *ghclient.Provider, ec2
 
 // RunScheduledSweep performs the three-minutely reconciliation: terminate
 // instances whose every runner slot is idle and eligible (see
-// eligibleForTermination), and recover PROVISIONING orphans (runner and job
-// side).
+// eligibleForTermination), fail any instance with a slot that never
+// confirmed ready within runner.boot_timeout (see reconcileStuckStarting),
+// and recover PROVISIONING orphans (runner and job side).
 func (s *Service) RunScheduledSweep(ctx context.Context) error {
 	now := time.Now()
 	var errs []error
@@ -55,6 +56,9 @@ func (s *Service) RunScheduledSweep(ctx context.Context) error {
 			s.logger.Error("cleanup: terminate expired instance", "runner_id", r.RunnerID, "error", err)
 			errs = append(errs, err)
 		}
+	}
+	if err := s.reconcileStuckStarting(ctx, active, now); err != nil {
+		errs = append(errs, err)
 	}
 
 	cutoff := now.Add(-staleProvisioningAfter)
@@ -102,6 +106,66 @@ func (s *Service) reconcileStaleProvisioningRunners(ctx context.Context, cutoff 
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// reconcileStuckStarting fails any active runner with a slot whose
+// starting_since marker (set by BindToJob) is still there past
+// runner.boot_timeout — its userdata script's runner-ready callback never
+// arrived (see store.MarkSlotReady), so the boot is presumed dead. This is
+// independent of the slot's current Busy/Idle status: BindToJob already made
+// every slot immediately allocatable (see its doc comment), so by the time
+// this fires the slot may already be busy with a job, idle in the pool, or
+// (the failure case this exists for) stuck exactly as BindToJob left it,
+// with no runner process ever having come up to claim it.
+//
+// Terminating is safe even for a slot that never actually registered:
+// terminateRunner's per-slot GitHub lookup treats "not found" as
+// already-gone. Any job bound to a stuck slot is reverted to QUEUED so it
+// gets a fresh runner instead of waiting forever.
+func (s *Service) reconcileStuckStarting(ctx context.Context, active []*store.Runner, now time.Time) error {
+	bootTimeout := s.cfg.Runner.BootTimeout.Duration()
+	var errs []error
+	for _, r := range active {
+		jobIDs, stuck := stuckStartingJobIDs(r, now, bootTimeout)
+		if !stuck {
+			continue
+		}
+		s.logger.Warn("cleanup: runner slot never confirmed ready, treating boot as failed", "runner_id", r.RunnerID, "instance_id", r.InstanceID)
+		if err := s.terminateRunner(ctx, r); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, jobID := range jobIDs {
+			job, err := s.store.GetJob(ctx, jobID)
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					continue
+				}
+				errs = append(errs, err)
+				continue
+			}
+			if err := s.store.RevertAllocation(ctx, job); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// stuckStartingJobIDs reports whether r has any slot whose starting_since is
+// still set past bootTimeout, and the JobIDs (if any) bound to such slots
+// that need reverting to QUEUED once the runner itself is torn down.
+func stuckStartingJobIDs(r *store.Runner, now time.Time, bootTimeout time.Duration) (jobIDs []int64, stuck bool) {
+	for _, slot := range r.Slots {
+		if slot.StartingSince == 0 || now.Sub(time.Unix(slot.StartingSince, 0)) < bootTimeout {
+			continue
+		}
+		stuck = true
+		if slot.JobID != 0 {
+			jobIDs = append(jobIDs, slot.JobID)
+		}
+	}
+	return jobIDs, stuck
 }
 
 func (s *Service) reconcileStaleProvisioningJobs(ctx context.Context, cutoff time.Time) error {
