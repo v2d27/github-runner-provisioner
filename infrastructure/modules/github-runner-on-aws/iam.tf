@@ -167,7 +167,7 @@ data "aws_iam_policy_document" "cleanup" {
     condition {
       test     = "StringEquals"
       variable = "ec2:ResourceTag/ManagedBy"
-      values   = ["provision-github-runner-on-demand"]
+      values   = ["github-runner-provisioner"]
     }
   }
 }

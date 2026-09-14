@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Zips each lambda/<name>/bootstrap (built by scripts/build.sh) into
-# lambda/<name>.zip, which terraform/modules/lambda's archive_file data
+# lambda/<name>.zip, which infrastructure/modules/lambda's archive_file data
 # source reads. Run after build.sh, before `terraform plan`/`apply`.
 set -euo pipefail
 

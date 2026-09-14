@@ -22,18 +22,18 @@ test:
 	go test ./...
 
 tf-fmt:
-	terragrunt hcl fmt --working-dir terraform --check
-	terraform fmt -recursive -check terraform/modules
+	terragrunt hcl fmt --working-dir infrastructure --check
+	terraform fmt -recursive -check infrastructure/modules
 
 # Credential-free: validates the Terragrunt HCL itself, then the Terraform
 # module directly (no provider config or state backend needed — see
-# terraform/modules/github-runner-on-aws). This does NOT need a real S3
+# infrastructure/modules/github-runner-on-aws). This does NOT need a real S3
 # state bucket; `terragrunt validate` (which does) only runs as part of
 # `make deploy-plan`/`deploy-apply`.
 tf-validate:
-	terragrunt hcl validate --working-dir terraform
-	cd terraform/modules/github-runner-on-aws && terraform init -backend=false -input=false >/dev/null && terraform validate
-	rm -rf terraform/modules/github-runner-on-aws/.terraform terraform/modules/github-runner-on-aws/.terraform.lock.hcl
+	terragrunt hcl validate --working-dir infrastructure
+	cd infrastructure/modules/github-runner-on-aws && terraform init -backend=false -input=false >/dev/null && terraform validate
+	rm -rf infrastructure/modules/github-runner-on-aws/.terraform infrastructure/modules/github-runner-on-aws/.terraform.lock.hcl
 
 clean:
 	rm -rf lambda/*/bootstrap lambda/*.zip

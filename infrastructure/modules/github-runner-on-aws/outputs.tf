@@ -1,6 +1,6 @@
 output "webhook_url" {
   description = "Register this + \"/webhook\" as the GitHub App's webhook URL."
-  value       = "${aws_apigatewayv2_stage.default.invoke_url}/webhook"
+  value       = "${aws_apigatewayv2_stage.default.invoke_url}webhook"
 }
 
 output "dynamodb_table_name" {

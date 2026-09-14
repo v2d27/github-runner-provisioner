@@ -6,7 +6,7 @@ package runner
 import (
 	"errors"
 
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
 )
 
 // ErrNoMatchingProfile indicates no configured profile has any label in

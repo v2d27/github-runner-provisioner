@@ -49,9 +49,9 @@ The platform — not the developer — decides AMI, instance type, Spot strategy
 cmd/                              Lambda entrypoints: webhook, provision, cleanup
 internal/                         Domain logic: config, github, runner, aws, store, webhook, cleanup
 configs/runner.yaml               Single source of truth: app policy AND infra settings
-terraform/modules/github-runner-on-aws/  The one Terraform module — every AWS resource this project needs
-terraform/root.hcl                Shared Terragrunt config: S3 state backend (native locking, no DynamoDB)
-terraform/environments/main/terragrunt.hcl  The single environment: reads runner.yaml, calls the module
+infrastructure/modules/github-runner-on-aws/  The one Terraform module — every AWS resource this project needs
+infrastructure/root.hcl                Shared Terragrunt config: S3 state backend (native locking, no DynamoDB)
+infrastructure/environments/main/terragrunt.hcl  The single environment: reads runner.yaml, calls the module
 scripts/                          build.sh, package.sh, deploy.sh
 src_backup/                       Prior implementation — reference only, not part of this build
 ```
@@ -63,17 +63,18 @@ App, configure `configs/runner.yaml`, deploy with Terragrunt, populate
 secrets, and verify end-to-end. Condensed version:
 
 1. Create a GitHub App (App ID, private key, webhook secret) — see [request-github-runner-token-architecture.md](./docs/infrastructure/request-github-runner-token-architecture.md). Install it on the target organization/repository.
-2. Edit [configs/runner.yaml](./configs/runner.yaml) — the single source of truth for both the app policy (`github`/`webhook`/`runner`: App ID, secret names, scope/group, profiles and their labels) and the deployment knobs (`infrastructure.main`: region, existing-VPC IDs, Lambda timeouts, tags) that `terraform/environments/main/terragrunt.hcl` reads and passes to the Terraform module. Every field is documented inline (Helm `values.yaml`-style `-- comment` convention).
-3. Fill in your state bucket/region in `terraform/root.hcl` (this is the one thing that can't come from `configs/runner.yaml` — Terraform's backend block can't read a file that might itself be the file telling it where to find its state).
-4. Build and deploy:
+2. Edit [configs/runner.yaml](./configs/runner.yaml) — the single source of truth for both the app policy (`github`/`webhook`/`runner`: App ID, secret names, scope/group, profiles and their labels) and the deployment knobs (`infrastructure.main`: region, existing-VPC IDs, Lambda timeouts, tags) that `infrastructure/environments/main/terragrunt.hcl` reads and passes to the Terraform module. Every field is documented inline (Helm `values.yaml`-style `-- comment` convention).
+3. Copy [configs/secrets-example.yaml](./configs/secrets-example.yaml) to `configs/secrets.yaml` and fill in the GitHub App's private key and webhook secret from step 1. This file is gitignored and never committed; Terraform reads it and applies both secrets' values directly.
+4. Fill in your state bucket/region in `infrastructure/root.hcl` (this is the one thing that can't come from `configs/runner.yaml` — Terraform's backend block can't read a file that might itself be the file telling it where to find its state).
+5. Build and deploy:
 
    ```sh
    make deploy-plan   # builds + packages Lambdas, then terragrunt plan
    make deploy-apply  # ... then terragrunt apply
    ```
 
-5. Populate the two Secrets Manager secrets (private key, webhook secret) out-of-band — Terraform creates the secret containers only, never their values.
-6. Point the GitHub App's webhook URL at the `webhook_url` output (`cd terraform/environments/main && terragrunt output -raw webhook_url`).
+   This also writes both secrets' values to Secrets Manager — no separate step needed.
+6. Point the GitHub App's webhook URL at the `webhook_url` output (`cd infrastructure/environments/main && terragrunt output -raw webhook_url`).
 
 ## Requirements
 

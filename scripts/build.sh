@@ -2,7 +2,7 @@
 # Builds each cmd/<name> as a Lambda "provided.al2023" custom-runtime
 # bootstrap binary into lambda/<name>/bootstrap.
 #
-# Must run before any `terraform plan`/`apply` — terraform/modules/lambda's
+# Must run before any `terraform plan`/`apply` — infrastructure/modules/lambda's
 # archive_file reads this output directly and never builds it itself
 # (a null_resource/local-exec calling `go build` from inside Terraform would
 # make `plan` non-deterministic and side-effecting).
@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 FUNCTIONS=(webhook provision cleanup)
-GOARCH="${GOARCH:-arm64}" # must match terraform/modules/lambda's `architecture` variable
+GOARCH="${GOARCH:-arm64}" # must match infrastructure/modules/lambda's `architecture` variable
 
 for name in "${FUNCTIONS[@]}"; do
   echo "==> building ${name} (linux/${GOARCH})"

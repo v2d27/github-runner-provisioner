@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/go-github/v88/github"
 
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
 )
 
 // ValidateRunnerGroup confirms the configured runner group exists before any

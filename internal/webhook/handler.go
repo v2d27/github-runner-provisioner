@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	ghclient "github.me/v2d27/provision-github-runner-on-demand/internal/github"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/store"
+	ghclient "github.me/v2d27/github-runner-provisioner/internal/github"
+	"github.me/v2d27/github-runner-provisioner/internal/store"
 )
 
 // Handler is the Lambda-runtime-agnostic core of the webhook endpoint:

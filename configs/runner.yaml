@@ -38,7 +38,7 @@ runner:
   # -- (string) "repository" or "organization". GitHub Runner Groups only
   # exist at the organization level, so `group` below must stay empty ("")
   # when scope is "repository" — enforced at config-load time.
-  scope: repository
+  scope: organization
 
   # -- (string) GitHub organization (or user) that owns the repository/org
   # this platform registers runners against. Always required.

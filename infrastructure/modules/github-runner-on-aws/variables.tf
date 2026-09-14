@@ -26,6 +26,18 @@ variable "webhook_secret_name" {
   description = "Must match runner_config_json's webhook.secret_name."
 }
 
+variable "github_app_private_key" {
+  type        = string
+  description = "The GitHub App's PEM private key, from configs/secrets.yaml's github.private_key_secret_value. Written as the value of the github_app_private_key_secret_name secret."
+  sensitive   = true
+}
+
+variable "webhook_secret_value" {
+  type        = string
+  description = "The webhook's HMAC signing secret, from configs/secrets.yaml's webhook.secret_value. Written as the value of the webhook_secret_name secret."
+  sensitive   = true
+}
+
 # --- Lambda build artifacts --------------------------------------------------
 
 variable "build_dir" {

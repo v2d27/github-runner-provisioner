@@ -54,7 +54,7 @@ resource "aws_route_table_association" "public" {
 resource "aws_security_group" "runner" {
   count       = var.existing_security_group_id == null ? 1 : 0
   name_prefix = "${local.name_prefix}-runner-"
-  description = "GitHub Actions self-hosted runner instances — outbound only."
+  description = "GitHub Actions self-hosted runner instances - outbound only."
   vpc_id      = local.vpc_id
 
   egress {
@@ -126,7 +126,10 @@ resource "aws_launch_template" "runner" {
 
   tag_specifications {
     resource_type = "instance"
-    tags          = var.tags
+    tags          = merge(var.tags, { 
+      Name = "${local.name_prefix}-runner", 
+      Entity = "GitHub Runner Provisioner"
+    })
   }
 
   lifecycle {

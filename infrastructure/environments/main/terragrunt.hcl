@@ -7,10 +7,12 @@ locals {
   repo_root     = get_repo_root()
   runner_config = yamldecode(file("${local.repo_root}/configs/runner.yaml"))
   infra         = local.runner_config.infrastructure[local.env_key]
+
+  secrets = yamldecode(file("${local.repo_root}/configs/secrets.yaml"))
 }
 
 terraform {
-  source = "${get_repo_root()}/terraform/modules/github-runner-on-aws"
+  source = "${get_repo_root()}/infrastructure/modules/github-runner-on-aws"
 }
 
 # Provider config is generated here (not committed as a static .tf file)
@@ -52,6 +54,9 @@ inputs = {
 
   github_app_private_key_secret_name = local.runner_config.github.private_key_secret_name
   webhook_secret_name                = local.runner_config.webhook.secret_name
+
+  github_app_private_key = local.secrets.github.private_key_secret_value
+  webhook_secret_value   = local.secrets.webhook.secret_value
 
   # Only the app-policy sections go to the Lambdas — infrastructure is a
   # Terragrunt/Terraform-only concern the application code never needs to see.

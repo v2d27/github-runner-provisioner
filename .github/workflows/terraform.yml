@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - "terraform/**"
+      - "infrastructure/**"
       - "configs/runner.yaml"
   pull_request:
     paths:
-      - "terraform/**"
+      - "infrastructure/**"
       - "configs/runner.yaml"
 
 jobs:
@@ -27,13 +27,13 @@ jobs:
           terragrunt-version: "1.1.4"
 
       - name: Format check (Terragrunt HCL)
-        run: terragrunt hcl fmt --working-dir terraform --check --diff
+        run: terragrunt hcl fmt --working-dir infrastructure --check --diff
 
       - name: Format check (the single Terraform module)
-        run: terraform fmt -recursive -check terraform/modules
+        run: terraform fmt -recursive -check infrastructure/modules
 
       - name: Validate Terragrunt HCL
-        run: terragrunt hcl validate --working-dir terraform
+        run: terragrunt hcl validate --working-dir infrastructure
 
       # `terraform validate` on the module directly, not `terragrunt
       # validate` — the latter runs `terraform init` against the real S3
@@ -41,7 +41,7 @@ jobs:
       # deployed. This still fully validates the module's HCL/types without
       # needing AWS credentials or a state bucket.
       - name: Validate Terraform module
-        working-directory: terraform/modules/github-runner-on-aws
+        working-directory: infrastructure/modules/github-runner-on-aws
         run: |
           terraform init -backend=false -input=false
           terraform validate
@@ -84,7 +84,7 @@ jobs:
           terragrunt-version: "1.1.4"
 
       - name: Plan
-        working-directory: terraform/environments/main
+        working-directory: infrastructure/environments/main
         run: |
           terragrunt init -input=false
           terragrunt plan -input=false

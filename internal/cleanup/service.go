@@ -12,10 +12,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.me/v2d27/provision-github-runner-on-demand/internal/aws"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
-	ghclient "github.me/v2d27/provision-github-runner-on-demand/internal/github"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/store"
+	"github.me/v2d27/github-runner-provisioner/internal/aws"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
+	ghclient "github.me/v2d27/github-runner-provisioner/internal/github"
+	"github.me/v2d27/github-runner-provisioner/internal/store"
 )
 
 // staleProvisioningAfter bounds how long a runner/job may sit in

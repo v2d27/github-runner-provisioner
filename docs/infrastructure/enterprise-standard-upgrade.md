@@ -1,6 +1,6 @@
 # enterprise-standard-upgrade
 
-Dưới đây là **complete architecture + implementation workflow** cho `provision-github-runner-on-demand`, đã tích hợp **2 requirement mới**:
+Dưới đây là **complete architecture + implementation workflow** cho `github-runner-provisioner`, đã tích hợp **2 requirement mới**:
 
 1. **Runner labels trong workflow bắt buộc phải chứa configurable prefix**.
 2. **Platform có thể cấu hình GitHub Runner Group**; `empty` = GitHub Default Runner Group.
@@ -1215,7 +1215,7 @@ Controller phải giữ scope trong DynamoDB để tránh allocate nhầm runner
 ## 23. Recommended Repository Structure
 
 ```text
-provision-github-runner-on-demand/
+github-runner-provisioner/
 │
 ├── cmd/
 │   ├── webhook/
@@ -1265,7 +1265,7 @@ provision-github-runner-on-demand/
 ├── config/
 │   └── runners.yaml
 │
-├── terraform/
+├── infrastructure/
 │   │
 │   ├── modules/
 │   │   ├── api-gateway/

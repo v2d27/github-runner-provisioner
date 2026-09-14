@@ -15,7 +15,7 @@ set -euo pipefail
 
 ACTION="${1:?usage: deploy.sh <plan|apply|destroy>}"
 
-cd "$(dirname "$0")/../terraform/environments/main"
+cd "$(dirname "$0")/../infrastructure/environments/main"
 
 terragrunt init -input=false
 terragrunt "${ACTION}"

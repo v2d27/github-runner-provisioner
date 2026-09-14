@@ -16,7 +16,7 @@ import (
 // EC2 wraps the subset of the EC2 API the provision/cleanup Lambdas need.
 // The launch template referenced by LaunchInput.LaunchTemplateID already
 // fixes network interfaces, security group, IAM instance profile and IMDSv2
-// (see terraform/modules/github-runner-on-aws/ec2.tf) — only the profile-specific shape (AMI,
+// (see infrastructure/modules/github-runner-on-aws/ec2.tf) — only the profile-specific shape (AMI,
 // instance type, Spot, UserData) is supplied per call, so adding a new
 // runner profile in configs/runner.yaml never requires a terraform apply.
 type EC2 struct {

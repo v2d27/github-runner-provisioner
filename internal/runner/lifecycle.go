@@ -1,6 +1,6 @@
 package runner
 
-import "github.me/v2d27/provision-github-runner-on-demand/internal/store"
+import "github.me/v2d27/github-runner-provisioner/internal/store"
 
 // This file documents (and lets callers assert) the legal state transitions
 // enforced by internal/store's conditional/transactional writes. The

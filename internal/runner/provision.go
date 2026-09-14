@@ -6,10 +6,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.me/v2d27/provision-github-runner-on-demand/internal/aws"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
-	ghclient "github.me/v2d27/provision-github-runner-on-demand/internal/github"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/store"
+	"github.me/v2d27/github-runner-provisioner/internal/aws"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
+	ghclient "github.me/v2d27/github-runner-provisioner/internal/github"
+	"github.me/v2d27/github-runner-provisioner/internal/store"
 )
 
 // provisionRunner claims a registration token, launches the EC2 instance and
@@ -63,7 +63,7 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 		UserData:         userData,
 		Tags: map[string]string{
 			"Name":          name,
-			"ManagedBy":     "provision-github-runner-on-demand",
+			"ManagedBy":     "github-runner-provisioner",
 			"RunnerProfile": sel.Profile,
 		},
 	})

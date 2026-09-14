@@ -1,10 +1,10 @@
 // Package config loads and validates the platform's runner configuration.
 //
 // The single source of truth is configs/runner.yaml. Each environment's
-// terraform/environments/<env>/terragrunt.hcl reads that file at apply time
+// infrastructure/environments/<env>/terragrunt.hcl reads that file at apply time
 // and passes its github/webhook/runner sections to every Lambda as the
 // RUNNER_CONFIG_JSON environment variable (see
-// terraform/modules/github-runner-on-aws/lambda.tf), so config changes are
+// infrastructure/modules/github-runner-on-aws/lambda.tf), so config changes are
 // applied through the normal one-time Terraform setup rather than requiring
 // code changes. Load() also accepts a YAML file directly, which is useful for
 // local development and for the "one-time setup" workflow described in

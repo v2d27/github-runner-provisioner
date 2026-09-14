@@ -14,11 +14,11 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
-	awsinternal "github.me/v2d27/provision-github-runner-on-demand/internal/aws"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/cleanup"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
-	ghclient "github.me/v2d27/provision-github-runner-on-demand/internal/github"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/store"
+	awsinternal "github.me/v2d27/github-runner-provisioner/internal/aws"
+	"github.me/v2d27/github-runner-provisioner/internal/cleanup"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
+	ghclient "github.me/v2d27/github-runner-provisioner/internal/github"
+	"github.me/v2d27/github-runner-provisioner/internal/store"
 )
 
 // spotInterruptionDetailType is the EventBridge detail-type for the

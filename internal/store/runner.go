@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/oklog/ulid/v2"
 
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
 )
 
 // RunnerStatus is the runner lifecycle state.

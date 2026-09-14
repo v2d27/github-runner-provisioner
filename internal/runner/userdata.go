@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
 )
 
 // UserDataParams carries exactly what an EC2 instance needs to register

@@ -4,10 +4,10 @@ import (
 	"context"
 	"log/slog"
 
-	"github.me/v2d27/provision-github-runner-on-demand/internal/aws"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
-	ghclient "github.me/v2d27/provision-github-runner-on-demand/internal/github"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/store"
+	"github.me/v2d27/github-runner-provisioner/internal/aws"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
+	ghclient "github.me/v2d27/github-runner-provisioner/internal/github"
+	"github.me/v2d27/github-runner-provisioner/internal/store"
 )
 
 // GitHub workflow_job actions this platform reacts to. Any other action

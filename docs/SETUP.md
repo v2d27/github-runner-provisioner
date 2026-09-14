@@ -1,8 +1,9 @@
 # Setup guide
 
 A complete, one-time walkthrough for standing up this platform from a clean
-checkout: create the GitHub App, edit the single config file, deploy with
-Terragrunt, wire up secrets, and verify a real workflow picks up a runner.
+checkout: create the GitHub App, edit `configs/runner.yaml` and
+`configs/secrets.yaml`, deploy with Terragrunt, and verify a real workflow
+picks up a runner.
 
 Follow the phases in order — each one has a checkpoint so you know it
 actually worked before moving to the next.
@@ -12,7 +13,7 @@ actually worked before moving to the next.
 Install these before starting:
 
 | Tool | Version | Check |
-|---|---|---|
+| --- | --- | --- |
 | Go | 1.26+ | `go version` |
 | Terraform | >= 1.10 | `terraform version` |
 | Terragrunt | >= 1.1 | `terragrunt --version` |
@@ -34,7 +35,7 @@ itself be the file telling it where to find its state. This is a one-time,
 per-AWS-account setup.
 
 ```sh
-BUCKET=your-company-terraform-state   # must be globally unique
+BUCKET=github-runner-terraform-state   # must be globally unique
 REGION=ap-southeast-1
 
 aws s3api create-bucket \
@@ -47,11 +48,11 @@ aws s3api put-bucket-versioning \
   --versioning-configuration Status=Enabled
 ```
 
-Then edit **`terraform/root.hcl`** and replace the two placeholder locals:
+Then edit **`infrastructure/root.hcl`** and replace the two placeholder locals:
 
 ```hcl
 locals {
-  state_bucket = "your-company-terraform-state"  # <- the bucket you just created
+  state_bucket = "github-runner-terraform-state"  # <- the bucket you just created
   state_region = "ap-southeast-1"                # <- must match
 }
 ```
@@ -61,7 +62,7 @@ there's no separate DynamoDB lock table to create.
 
 > Alternative: if you'd rather let Terragrunt create the bucket for you,
 > skip the `aws s3api` commands above and add `--backend-bootstrap` to the
-> `terragrunt init` command in Phase 5.
+> `terragrunt init` command in Phase 6.
 
 **Checkpoint:** `aws s3 ls "s3://$BUCKET"` returns without error.
 
@@ -81,20 +82,31 @@ token (see [request-github-runner-token-architecture.md](./infrastructure/reques
    - **Webhook → Active**: checked.
    - **Webhook URL**: leave a placeholder for now, e.g. `https://example.com/webhook` — you'll come back and fix this in Phase 7, after Terraform gives you the real one.
    - **Webhook secret**: generate one now and save it somewhere safe —
-     you'll need it again in Phase 6:
+     you'll need it again in Phase 4:
+
      ```sh
      openssl rand -hex 32
      ```
-3. **Permissions** — set based on `runner.scope` in `configs/runner.yaml`:
-   - `scope: repository` → **Repository permissions → Administration: Read and write**
-   - `scope: organization` → **Organization permissions → Self-hosted runners: Read and write**
+
+3. **Permissions**:
+   - **Repository permissions → Actions: Read-only** — required in **both**
+     scopes, regardless of `runner.scope`. This is what lets the app
+     subscribe to the `workflow_job` webhook event in step 4; without it,
+     GitHub won't let you enable that event, and the platform will never
+     receive the deliveries that trigger provisioning.
+   - Then, set based on `runner.scope` in `configs/runner.yaml`:
+     - `scope: repository` → **Repository permissions → Administration: Read and write**
+       (covers creating/removing/listing runners on a single repository).
+     - `scope: organization` → **Organization permissions → Self-hosted runners: Read and write**
+       (covers creating/removing/listing runners and runner groups across
+       the organization).
 4. **Subscribe to events**: check **Workflow jobs** (and only that — this
    platform ignores every other event type).
 5. **Where can this GitHub App be installed**: "Only on this account" is fine.
 6. Click **Create GitHub App**.
 7. Note the **App ID** shown at the top of the app's settings page.
 8. Scroll to **Private keys → Generate a private key**. A `.pem` file
-   downloads — keep it, you'll upload its contents in Phase 6.
+   downloads — keep it, you'll paste its contents in Phase 4.
 9. Click **Install App** (left sidebar) and install it on the
    organization/repository matching your `runner.yaml` scope.
 
@@ -163,7 +175,40 @@ in the file.
 
 ---
 
-## Phase 4 — Build the Lambda binaries
+## Phase 4 — Configure `configs/secrets.yaml`
+
+Terraform applies both secret values directly — there's no separate
+out-of-band step. Copy the template and fill it in:
+
+```sh
+cp configs/secrets-example.yaml configs/secrets.yaml
+```
+
+Edit `configs/secrets.yaml`:
+
+```yaml
+github:
+  private_key_secret_value: |
+    -----BEGIN RSA PRIVATE KEY-----
+    ... contents of the .pem file downloaded in Phase 2, step 8 ...
+    -----END RSA PRIVATE KEY-----
+
+webhook:
+  secret_value: "the-webhook-secret-you-generated-in-phase-2"
+```
+
+This file is gitignored and never committed — Terraform reads it locally
+(via `infrastructure/environments/main/terragrunt.hcl`) and its values end up in
+Terraform state, so treat the state backend (Phase 1's S3 bucket) as
+holding these credentials too.
+
+**Checkpoint:** `configs/secrets.yaml` exists, is not tracked by git
+(`git status` shouldn't mention it), and both values are filled in (no `...`
+placeholders left).
+
+---
+
+## Phase 5 — Build the Lambda binaries
 
 ```sh
 make package
@@ -177,7 +222,7 @@ Terraform reads these zips directly — always run this before deploying.
 
 ---
 
-## Phase 5 — Deploy
+## Phase 6 — Deploy
 
 ```sh
 make deploy-plan
@@ -185,7 +230,8 @@ make deploy-plan
 
 Review the plan — you should see roughly 40 resources to add (DynamoDB
 table, SQS queue + DLQ, VPC + subnet + security group, IAM roles, 3 Lambda
-functions, API Gateway, EventBridge rules) and nothing to destroy on a first
+functions, API Gateway, EventBridge rules, and the two Secrets Manager
+secrets *with their values* from Phase 4) and nothing to destroy on a first
 run. Then:
 
 ```sh
@@ -197,46 +243,26 @@ Confirm when prompted. This takes a few minutes.
 > If you skipped creating the S3 bucket in Phase 1, add
 > `--backend-bootstrap` to the underlying `terragrunt init` — either export
 > `TF_CLI_ARGS_init="--backend-bootstrap"` before running `make
-> deploy-apply`, or `cd terraform/environments/main && terragrunt init
+> deploy-apply`, or `cd infrastructure/environments/main && terragrunt init
 > --backend-bootstrap` once manually first.
 
 **Checkpoint:**
 
 ```sh
-cd terraform/environments/main
+cd infrastructure/environments/main
 terragrunt output -raw webhook_url
 ```
 
 prints a URL like `https://abc123.execute-api.ap-southeast-1.amazonaws.com/webhook`.
-
----
-
-## Phase 6 — Populate the secrets
-
-Terraform created the two Secrets Manager secret *containers* but
-deliberately never touches their *values* — that's a manual, one-time step:
+Also confirm the secrets landed:
 
 ```sh
-aws secretsmanager put-secret-value \
-  --secret-id github-runner/app/private-key \
-  --secret-string file:///path/to/your-downloaded-key.pem
-
-aws secretsmanager put-secret-value \
-  --secret-id github-runner/webhook/secret \
-  --secret-string "the-webhook-secret-you-generated-in-phase-2"
+aws secretsmanager get-secret-value --secret-id github-runner-provisioner/app/private-key --query VersionId --output text
 ```
 
-(Use whatever secret names you actually put in
-`configs/runner.yaml`'s `github.private_key_secret_name` /
-`webhook.secret_name` if you changed the defaults.)
-
-**Checkpoint:**
-
-```sh
-aws secretsmanager get-secret-value --secret-id github-runner/app/private-key --query VersionId --output text
-```
-
-returns a version ID (not an error).
+(substitute whatever secret names you put in `configs/runner.yaml`'s
+`github.private_key_secret_name` / `webhook.secret_name` if you changed the
+defaults) returns a version ID (not an error).
 
 ---
 
@@ -245,9 +271,10 @@ returns a version ID (not an error).
 Back in the GitHub App's settings (**Settings → Developer settings → GitHub
 Apps → your app → General**):
 
-1. Set **Webhook URL** to the `webhook_url` output from Phase 5's checkpoint.
-2. Confirm **Webhook secret** matches exactly what you put in Secrets
-   Manager in Phase 6 (re-paste it if you're not sure).
+1. Set **Webhook URL** to the `webhook_url` output from Phase 6's checkpoint.
+2. Confirm **Webhook secret** matches exactly what you set in
+   `configs/secrets.yaml` (Phase 4) and applied to Secrets Manager in
+   Phase 6 (re-paste it if you're not sure).
 3. Save changes.
 
 **Checkpoint:** GitHub's App settings page has a **Recent Deliveries** tab
@@ -292,8 +319,10 @@ If nothing happens, see **Troubleshooting** below.
 ## Troubleshooting
 
 **Webhook returns 401 / GitHub shows a failed delivery.** The webhook
-secret in GitHub doesn't match Secrets Manager. Re-check Phase 6/7 — the
-webhook Lambda logs `invalid webhook signature` when this happens
+secret in GitHub doesn't match Secrets Manager. Re-check Phase 4 (the value
+in `configs/secrets.yaml`), Phase 6 (that `deploy-apply` actually ran after
+editing it), and Phase 7 — the webhook Lambda logs `invalid webhook
+signature` when this happens
 (`aws logs tail /aws/lambda/<project_name>-main-webhook`).
 
 **Workflow stays queued, no runner ever appears.** Check the provision
@@ -306,7 +335,7 @@ AMI ID for the region you deployed to (the placeholder `ami-yyyy…` in the
 the error message, it names the missing action.
 
 **`terragrunt init` fails with a bucket/access error.** The state bucket in
-`terraform/root.hcl` doesn't exist or your AWS credentials can't reach it —
+`infrastructure/root.hcl` doesn't exist or your AWS credentials can't reach it —
 revisit Phase 1.
 
 **A runner never gets cleaned up / EC2 keeps running.** Check
@@ -323,9 +352,11 @@ every 3 minutes; give it a few cycles before assuming it's broken.
   the updated profile).
 - **Change idle timeout or group**: same — edit the YAML, redeploy.
 - **Tear down**:
+
   ```sh
-  cd terraform/environments/main
+  cd infrastructure/environments/main
   terragrunt destroy
   ```
+
   (Secrets Manager secrets aren't destroyed automatically if they still
   hold a value and deletion protection kicks in — confirm the prompt.)

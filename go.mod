@@ -1,4 +1,4 @@
-module github.me/v2d27/provision-github-runner-on-demand
+module github.me/v2d27/github-runner-provisioner
 
 go 1.26
 

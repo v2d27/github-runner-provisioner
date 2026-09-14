@@ -13,12 +13,12 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
-	awsinternal "github.me/v2d27/provision-github-runner-on-demand/internal/aws"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/config"
-	ghclient "github.me/v2d27/provision-github-runner-on-demand/internal/github"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/runner"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/store"
-	"github.me/v2d27/provision-github-runner-on-demand/internal/webhook"
+	awsinternal "github.me/v2d27/github-runner-provisioner/internal/aws"
+	"github.me/v2d27/github-runner-provisioner/internal/config"
+	ghclient "github.me/v2d27/github-runner-provisioner/internal/github"
+	"github.me/v2d27/github-runner-provisioner/internal/runner"
+	"github.me/v2d27/github-runner-provisioner/internal/store"
+	"github.me/v2d27/github-runner-provisioner/internal/webhook"
 )
 
 var (

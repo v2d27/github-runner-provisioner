@@ -9,7 +9,7 @@ import (
 )
 
 // Queue sends normalized events to the runner job queue (with its DLQ,
-// configured in terraform/modules/github-runner-on-aws/sqs.tf).
+// configured in infrastructure/modules/github-runner-on-aws/sqs.tf).
 type Queue struct {
 	client   *sqs.Client
 	queueURL string

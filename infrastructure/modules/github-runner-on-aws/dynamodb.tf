@@ -41,27 +41,45 @@ resource "aws_dynamodb_table" "this" {
 
   # Allocation pool: find an IDLE runner for {scope, owner, profile, group}.
   global_secondary_index {
-    name            = "gsi1"
-    hash_key        = "gsi1pk"
-    range_key       = "gsi1sk"
+    name = "gsi1"
+    key_schema {
+      attribute_name = "gsi1pk"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "gsi1sk"
+      key_type       = "RANGE"
+    }
     projection_type = "ALL"
   }
 
   # Status timeline: cleanup's expiry sweep + stuck-in-PROVISIONING sweep,
   # for both Runner and Job items.
   global_secondary_index {
-    name            = "gsi2"
-    hash_key        = "gsi2pk"
-    range_key       = "gsi2sk"
+    name = "gsi2"
+    key_schema {
+      attribute_name = "gsi2pk"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "gsi2sk"
+      key_type       = "RANGE"
+    }
     projection_type = "ALL"
   }
 
   # Instance reverse lookup: orphan reconciliation + spot-interruption
   # handling.
   global_secondary_index {
-    name            = "gsi3"
-    hash_key        = "gsi3pk"
-    range_key       = "gsi3sk"
+    name = "gsi3"
+    key_schema {
+      attribute_name = "gsi3pk"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "gsi3sk"
+      key_type       = "RANGE"
+    }
     projection_type = "ALL"
   }
 

@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - "terraform/**"
+      - "infrastructure/**"
       - "docs/**"
       - "**.md"
   pull_request:
     paths-ignore:
-      - "terraform/**"
+      - "infrastructure/**"
       - "docs/**"
       - "**.md"
 

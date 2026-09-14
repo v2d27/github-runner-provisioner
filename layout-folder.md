@@ -50,7 +50,7 @@ github-runner-manager/
 │   └── cleanup/
 │       └── bootstrap
 │
-├── terraform/
+├── infrastructure/
 │   ├── modules/
 │   │   ├── lambda/
 │   │   │   ├── main.tf
