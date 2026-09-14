@@ -43,9 +43,17 @@ type Runner struct {
 	SK         string `dynamodbav:"sk"`
 	EntityType string `dynamodbav:"entity_type"`
 
-	RunnerID       string `dynamodbav:"runner_id"`
-	Name           string `dynamodbav:"name"`
-	GitHubRunnerID int64  `dynamodbav:"github_runner_id,omitempty"`
+	RunnerID string `dynamodbav:"runner_id"`
+	// Names holds one GitHub-registered runner name per runner process
+	// installed on the instance (config.Profile.RunnerCount, 1-2) — see
+	// internal/runner.RenderUserData. Cleanup deregisters every name here
+	// before terminating the instance, so none are left orphaned in GitHub's
+	// runner list.
+	Names []string `dynamodbav:"names"`
+	// GitHubRunnerIDs mirrors Names — populated once cleanup resolves each
+	// name to its GitHub-assigned runner ID (GitHub's registration API never
+	// returns one directly).
+	GitHubRunnerIDs []int64 `dynamodbav:"github_runner_ids,omitempty"`
 
 	Scope        config.Scope `dynamodbav:"scope"`
 	Organization string       `dynamodbav:"organization"`
@@ -89,15 +97,17 @@ func NewRunnerID() string {
 // times out (reconciled later by ListStaleProvisioning). ami is the AMI ID
 // actually resolved for this launch — whether pinned in config.Profile.AMI
 // or resolved dynamically via config.Profile.AMILookup — recorded here so
-// it's always known which image a given instance booted from.
-func NewProvisioningRunner(sel PoolSelector, runnerID, name string, labels []string, architecture, instanceType, ami string) *Runner {
+// it's always known which image a given instance booted from. names holds
+// one entry per runner process the instance will install (config.Profile.
+// RunnerCount).
+func NewProvisioningRunner(sel PoolSelector, runnerID string, names []string, labels []string, architecture, instanceType, ami string) *Runner {
 	now := time.Now().Unix()
 	return &Runner{
 		PK:           runnerPK(runnerID),
 		SK:           stateSK,
 		EntityType:   "RUNNER",
 		RunnerID:     runnerID,
-		Name:         name,
+		Names:        names,
 		Scope:        sel.Scope,
 		Organization: sel.Organization,
 		Repository:   sel.Repository,
@@ -455,24 +465,30 @@ func (c *Client) MarkRunnerFailed(ctx context.Context, runnerID string) error {
 	return nil
 }
 
-// MarkTerminated finalizes a runner record after its EC2 instance and GitHub
-// registration have both been removed, recording the GitHub runner ID
-// resolved during cleanup and setting a TTL so the record eventually expires.
-func (c *Client) MarkTerminated(ctx context.Context, runnerID string, githubRunnerID int64) error {
-	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+// MarkTerminated finalizes a runner record after its EC2 instance and every
+// one of its GitHub registrations (githubRunnerIDs, one per Names entry that
+// was actually found registered) have been removed, and sets a TTL so the
+// record eventually expires.
+func (c *Client) MarkTerminated(ctx context.Context, runnerID string, githubRunnerIDs []int64) error {
+	ids, err := attributevalue.Marshal(githubRunnerIDs)
+	if err != nil {
+		return fmt.Errorf("store: marshal github runner ids for runner %s: %w", runnerID, err)
+	}
+
+	_, err = c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: runnerPK(runnerID)},
 			"sk": &types.AttributeValueMemberS{Value: stateSK},
 		},
-		UpdateExpression: aws.String("SET #status = :terminated, github_runner_id = :ghID, #ttl = :ttl"),
+		UpdateExpression: aws.String("SET #status = :terminated, github_runner_ids = :ghIDs, #ttl = :ttl"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",
 			"#ttl":    "ttl",
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":terminated": &types.AttributeValueMemberS{Value: string(RunnerTerminated)},
-			":ghID":       &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", githubRunnerID)},
+			":ghIDs":      ids,
 			":ttl":        &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(terminatedTTL).Unix())},
 		},
 	})

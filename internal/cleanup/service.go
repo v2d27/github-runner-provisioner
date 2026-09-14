@@ -145,22 +145,31 @@ func (s *Service) terminateRunner(ctx context.Context, r *store.Runner) error {
 		return nil
 	}
 
-	var githubRunnerID int64
 	client, err := s.github.Client(ctx)
 	if err != nil {
 		return err
 	}
-	ghRunner, err := ghclient.FindRunnerByName(ctx, client, s.cfg.Runner, r.Name)
-	switch {
-	case err == nil:
-		githubRunnerID = ghRunner.GetID()
-		if err := ghclient.RemoveRunner(ctx, client, s.cfg.Runner, githubRunnerID); err != nil {
+
+	// r.Names holds one GitHub registration per runner process the instance
+	// was told to run (config.Profile.RunnerCount, 1-2) — every one of them
+	// must be deregistered, or the unremoved ones sit in GitHub's runner
+	// list forever (offline, unremovable by any later sweep once the
+	// instance and its DynamoDB row are both gone).
+	githubRunnerIDs := make([]int64, 0, len(r.Names))
+	for _, name := range r.Names {
+		ghRunner, err := ghclient.FindRunnerByName(ctx, client, s.cfg.Runner, name)
+		switch {
+		case err == nil:
+			id := ghRunner.GetID()
+			if err := ghclient.RemoveRunner(ctx, client, s.cfg.Runner, id); err != nil {
+				return err
+			}
+			githubRunnerIDs = append(githubRunnerIDs, id)
+		case errors.Is(err, ghclient.ErrRunnerNotFound):
+			// Already deregistered (or never finished registering) — fine.
+		default:
 			return err
 		}
-	case errors.Is(err, ghclient.ErrRunnerNotFound):
-		// Already deregistered (or never finished registering) — fine.
-	default:
-		return err
 	}
 
 	if r.InstanceID != "" {
@@ -169,9 +178,9 @@ func (s *Service) terminateRunner(ctx context.Context, r *store.Runner) error {
 		}
 	}
 
-	if err := s.store.MarkTerminated(ctx, r.RunnerID, githubRunnerID); err != nil {
+	if err := s.store.MarkTerminated(ctx, r.RunnerID, githubRunnerIDs); err != nil {
 		return err
 	}
-	s.logger.Info("cleanup: runner terminated", "runner_id", r.RunnerID, "instance_id", r.InstanceID, "github_runner_id", githubRunnerID)
+	s.logger.Info("cleanup: runner terminated", "runner_id", r.RunnerID, "instance_id", r.InstanceID, "github_runner_ids", githubRunnerIDs)
 	return nil
 }

@@ -22,10 +22,17 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 		return fmt.Errorf("runner: get github client: %w", err)
 	}
 
-	regToken, err := ghclient.CreateRegistrationToken(ctx, client, s.cfg.Runner)
-	if err != nil {
-		s.revertProvisioning(ctx, job)
-		return fmt.Errorf("runner: create registration token: %w", err)
+	// One registration token per runner process the instance will run
+	// (profile.RunnerCount, 1-2) — each config.sh registration consumes its
+	// own token.
+	regTokens := make([]string, profile.RunnerCount)
+	for i := range regTokens {
+		regToken, err := ghclient.CreateRegistrationToken(ctx, client, s.cfg.Runner)
+		if err != nil {
+			s.revertProvisioning(ctx, job)
+			return fmt.Errorf("runner: create registration token: %w", err)
+		}
+		regTokens[i] = regToken.Token
 	}
 
 	imageID, err := s.resolveAMI(ctx, profile)
@@ -35,24 +42,26 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 	}
 
 	runnerID := store.NewRunnerID()
-	name := runnerName(sel.Profile, runnerID)
+	names := runnerNames(sel.Profile, runnerID, profile.RunnerCount)
 	labels := runnerLabels(profile.Labels)
 
-	runnerRow := store.NewProvisioningRunner(sel, runnerID, name, labels, profile.Architecture, profile.InstanceType, imageID)
+	runnerRow := store.NewProvisioningRunner(sel, runnerID, names, labels, profile.Architecture, profile.InstanceType, imageID)
 	if err := s.store.CreateProvisioning(ctx, runnerRow); err != nil {
 		s.revertProvisioning(ctx, job)
 		return fmt.Errorf("runner: create provisioning row: %w", err)
 	}
 
 	userData := RenderUserData(UserDataParams{
-		Scope:             s.cfg.Runner.Scope,
-		Organization:      s.cfg.Runner.Organization,
-		Repository:        s.cfg.Runner.Repository,
-		RegistrationToken: regToken.Token,
-		RunnerName:        name,
-		Labels:            labels,
-		Group:             s.cfg.Runner.Group,
-		Architecture:      profile.Architecture,
+		Scope:              s.cfg.Runner.Scope,
+		Organization:       s.cfg.Runner.Organization,
+		Repository:         s.cfg.Runner.Repository,
+		RegistrationTokens: regTokens,
+		RunnerNames:        names,
+		RunnerCount:        profile.RunnerCount,
+		VirtualRAMGB:       profile.VirtualRAMGB,
+		Labels:             labels,
+		Group:              s.cfg.Runner.Group,
+		Architecture:       profile.Architecture,
 	})
 
 	instanceID, err := s.ec2.RunInstance(ctx, aws.LaunchInput{
@@ -60,9 +69,10 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 		ImageID:          imageID,
 		InstanceType:     profile.InstanceType,
 		Spot:             profile.Spot,
+		DiskSizeGB:       profile.DiskSizeGB,
 		UserData:         userData,
 		Tags: map[string]string{
-			"Name":          name,
+			"Name":          names[0],
 			"ManagedBy":     "github-runner-provisioner",
 			"RunnerProfile": sel.Profile,
 		},
@@ -108,15 +118,23 @@ func (s *Service) revertProvisioning(ctx context.Context, job *store.Job) {
 	}
 }
 
-// runnerName produces a short, deterministic, human-recognizable runner
-// name. It doubles as the lookup key cleanup uses to resolve a GitHub-
-// assigned runner ID (GitHub's registration API doesn't return one).
-func runnerName(profile, runnerID string) string {
+// runnerNames produces one GitHub-registration name per runner process the
+// instance will run (count — config.Profile.RunnerCount, 1-2), e.g.
+// "amd64-abc1234567-1". Each doubles as a lookup key cleanup uses to resolve
+// its GitHub-assigned runner ID (GitHub's registration API doesn't return one
+// directly) — see store.Runner.Names.
+func runnerNames(profile, runnerID string, count int) []string {
 	short := runnerID
 	if len(short) > 10 {
 		short = short[len(short)-10:]
 	}
-	return fmt.Sprintf("%s-%s", profile, strings.ToLower(short))
+	base := fmt.Sprintf("%s-%s", profile, strings.ToLower(short))
+
+	names := make([]string, count)
+	for i := range names {
+		names[i] = fmt.Sprintf("%s-%d", base, i+1)
+	}
+	return names
 }
 
 // runnerLabels combines the fixed "self-hosted" label every GitHub

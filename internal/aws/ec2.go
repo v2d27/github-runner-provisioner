@@ -33,6 +33,9 @@ type LaunchInput struct {
 	ImageID          string
 	InstanceType     string
 	Spot             bool
+	// DiskSizeGB overrides the AMI's default root EBS volume size. Zero
+	// leaves the AMI's own default size in place.
+	DiskSizeGB int
 	// UserData is plaintext; RunInstance base64-encodes it as EC2 requires.
 	UserData string
 	Tags     map[string]string
@@ -51,6 +54,11 @@ func (e *EC2) RunInstance(ctx context.Context, in LaunchInput) (string, error) {
 		}
 	}
 
+	blockDeviceMappings, err := e.rootVolumeOverride(ctx, in.ImageID, in.DiskSizeGB)
+	if err != nil {
+		return "", fmt.Errorf("aws: resolve root volume for %s: %w", in.ImageID, err)
+	}
+
 	out, err := e.client.RunInstances(ctx, &ec2.RunInstancesInput{
 		MinCount: aws.Int32(1),
 		MaxCount: aws.Int32(1),
@@ -61,6 +69,7 @@ func (e *EC2) RunInstance(ctx context.Context, in LaunchInput) (string, error) {
 		ImageId:               aws.String(in.ImageID),
 		InstanceType:          types.InstanceType(in.InstanceType),
 		InstanceMarketOptions: marketOptions,
+		BlockDeviceMappings:   blockDeviceMappings,
 		UserData:              aws.String(base64.StdEncoding.EncodeToString([]byte(in.UserData))),
 		TagSpecifications: []types.TagSpecification{
 			{ResourceType: types.ResourceTypeInstance, Tags: tagsFromMap(in.Tags)},
@@ -73,6 +82,36 @@ func (e *EC2) RunInstance(ctx context.Context, in LaunchInput) (string, error) {
 		return "", fmt.Errorf("aws: run instance: no instance returned")
 	}
 	return *out.Instances[0].InstanceId, nil
+}
+
+// rootVolumeOverride resizes imageID's root EBS volume to diskSizeGB. Returns
+// nil (no override — the AMI's own default size applies) if diskSizeGB <= 0.
+// The root device name varies by AMI (e.g. Ubuntu's /dev/sda1 vs Amazon
+// Linux's /dev/xvda), so it's looked up per launch rather than assumed.
+func (e *EC2) rootVolumeOverride(ctx context.Context, imageID string, diskSizeGB int) ([]types.BlockDeviceMapping, error) {
+	if diskSizeGB <= 0 {
+		return nil, nil
+	}
+
+	out, err := e.client.DescribeImages(ctx, &ec2.DescribeImagesInput{ImageIds: []string{imageID}})
+	if err != nil {
+		return nil, fmt.Errorf("describe image: %w", err)
+	}
+	if len(out.Images) == 0 || out.Images[0].RootDeviceName == nil {
+		return nil, fmt.Errorf("image %s has no root device name", imageID)
+	}
+
+	return []types.BlockDeviceMapping{
+		{
+			DeviceName: out.Images[0].RootDeviceName,
+			Ebs: &types.EbsBlockDevice{
+				VolumeSize:          aws.Int32(int32(diskSizeGB)),
+				VolumeType:          types.VolumeTypeGp3,
+				DeleteOnTermination: aws.Bool(true),
+				Encrypted:           aws.Bool(true),
+			},
+		},
+	}, nil
 }
 
 // TerminateInstance terminates a single instance. Terminating an instance

@@ -42,6 +42,20 @@ const (
 
 	architectureX86_64 = "x86_64"
 	architectureArm64  = "arm64"
+
+	// defaultDiskSizeGB is applied to any profile that leaves disk_size
+	// unset/zero.
+	defaultDiskSizeGB = 25
+	// minDiskSizeGB is the smallest root volume Validate accepts — enough
+	// headroom for the OS, Docker, and its image cache.
+	minDiskSizeGB = 8
+
+	// defaultRunnerCount is applied to any profile that leaves runner_count
+	// unset/zero.
+	defaultRunnerCount = 1
+	// maxRunnerCount bounds how many GitHub Actions runner processes
+	// RenderUserData will install on a single instance.
+	maxRunnerCount = 2
 )
 
 // Config is the fully parsed, validated platform configuration.
@@ -108,6 +122,23 @@ type Profile struct {
 	AMILookup    *AMILookup `yaml:"ami_lookup,omitempty" json:"ami_lookup,omitempty"`
 	InstanceType string     `yaml:"instance_type" json:"instance_type"`
 	Spot         bool       `yaml:"spot" json:"spot"`
+
+	// DiskSizeGB overrides the AMI's default root EBS volume size.
+	// applyDefaults fills this in with defaultDiskSizeGB (25) when left
+	// zero/unset.
+	DiskSizeGB int `yaml:"disk_size,omitempty" json:"disk_size,omitempty"`
+
+	// VirtualRAMGB, when non-zero, is the size in GB of a disk-backed
+	// swapfile RenderUserData creates at boot to extend available memory
+	// ("virtual RAM") — see internal/runner.RenderUserData. Zero/unset
+	// (the default) creates no swapfile.
+	VirtualRAMGB int `yaml:"virtual_ram,omitempty" json:"virtual_ram,omitempty"`
+
+	// RunnerCount is how many independent GitHub Actions runner processes
+	// (each its own OS user and GitHub registration) RenderUserData installs
+	// on one instance. applyDefaults fills this in with defaultRunnerCount
+	// (1) when left zero/unset; Validate caps it at maxRunnerCount (2).
+	RunnerCount int `yaml:"runner_count,omitempty" json:"runner_count,omitempty"`
 }
 
 // AMILookup resolves to the newest AMI for an os/version at launch time
@@ -224,12 +255,25 @@ func (c *Config) Validate() error {
 }
 
 // applyDefaults fills in values that have a sensible default so Validate
-// doesn't need to treat them as required. Currently: a profile with no
-// declared labels defaults to a single label equal to its own map key.
+// doesn't need to treat them as required: a profile with no declared labels
+// defaults to a single label equal to its own map key, disk_size defaults to
+// defaultDiskSizeGB, and runner_count defaults to defaultRunnerCount.
 func (c *Config) applyDefaults() {
 	for name, p := range c.Runner.Profiles {
+		changed := false
 		if len(p.Labels) == 0 {
 			p.Labels = []string{name}
+			changed = true
+		}
+		if p.DiskSizeGB <= 0 {
+			p.DiskSizeGB = defaultDiskSizeGB
+			changed = true
+		}
+		if p.RunnerCount <= 0 {
+			p.RunnerCount = defaultRunnerCount
+			changed = true
+		}
+		if changed {
 			c.Runner.Profiles[name] = p
 		}
 	}
@@ -267,6 +311,15 @@ func validateProfiles(profiles map[string]Profile) []string {
 		}
 		if strings.TrimSpace(p.InstanceType) == "" {
 			errs = append(errs, fmt.Sprintf("runner.profiles[%s].instance_type is required", name))
+		}
+		if p.DiskSizeGB < minDiskSizeGB {
+			errs = append(errs, fmt.Sprintf("runner.profiles[%s].disk_size must be at least %dGB, got %d", name, minDiskSizeGB, p.DiskSizeGB))
+		}
+		if p.VirtualRAMGB < 0 {
+			errs = append(errs, fmt.Sprintf("runner.profiles[%s].virtual_ram must not be negative", name))
+		}
+		if p.RunnerCount < 1 || p.RunnerCount > maxRunnerCount {
+			errs = append(errs, fmt.Sprintf("runner.profiles[%s].runner_count must be between 1 and %d, got %d", name, maxRunnerCount, p.RunnerCount))
 		}
 
 		for _, label := range p.Labels {
