@@ -1,54 +1,97 @@
 # Provision self-hosted GitHub runners on-demand in AWS
+
 ![shield](https://img.shields.io/badge/Scope-github_runners-blue)
 ![shield](https://img.shields.io/badge/Cloud_provider-AWS-orange)
-![shield](https://img.shields.io/badge/Terrafrom->=v1.0-orange)
+![shield](https://img.shields.io/badge/Terraform->=1.10-orange)
+![shield](https://img.shields.io/badge/Terragrunt-1.x-blueviolet)
+![shield](https://img.shields.io/badge/Language-Go-00ADD8)
 ![shield](https://img.shields.io/badge/Type-spot_instance-purple)
-![shield](https://img.shields.io/badge/Permission-full_control-purple)
 
 ## Purpose
-This project aims to provision self-hosted GitHub runners on-demand in AWS. It automates the setup and scaling of GitHub runners to handle CI/CD workloads efficiently.
 
-## Features
-- Scaling & Sustainability: Automatically calculating runners, scale up and down based on requesting.
-- Life cycles: Self-killed when no jobs are running after particularly time.
-- Security: Runners are created on-demand and terminated after use (ephemeral runners).
-- Cost optimization: Runners are created on AWS spot instances.
-- Runner level: Support organization and repository level runners. Enterprise level runners are not supported (yet).
-- Multi-Runner: Create multiple runner configurations with a single deployment
+This project provisions self-hosted GitHub Actions runners on-demand in AWS: event-driven, idempotent, and enterprise-grade. It replaces an earlier Python/TypeScript prototype (kept for reference, untouched, in [src_backup/](./src_backup)) with a Go implementation built around three Lambda functions, a single DynamoDB table for state, and a GitHub App for authentication — **no personal access token, ever**.
 
 ## Architecture
-The architecture of this project is illustrated below:
 
-![img](./docs/github-runner.drawio.png)
+See [docs/infrastructure/enterprise-standard-upgrade.md](./docs/infrastructure/enterprise-standard-upgrade.md) for the full design and [docs/infrastructure/request-github-runner-token-architecture.md](./docs/infrastructure/request-github-runner-token-architecture.md) for the GitHub App authentication flow. In short:
 
-## Scope
-The scope of this project includes:
-- Provisioning AWS resources required for GitHub runners.
-- Configuring GitHub runners to scale based on demand.
-- Ensuring secure and efficient communication between GitHub and AWS.
+```text
+GitHub (workflow_job webhook)
+        │
+        ▼
+API Gateway -> webhook Lambda (verify signature, dedupe, normalize)
+        │
+        ▼
+       SQS (+ DLQ)
+        │
+        ▼
+provision Lambda (profile + group resolution, allocate-or-provision)
+        │              │
+        ▼              ▼
+   DynamoDB        GitHub App (registration token) -> EC2 Spot (runner)
+        ▲
+        │
+EventBridge (rate(3m) + spot interruption) -> cleanup Lambda
+```
+
+Developers only declare capability in their workflow — the label(s) just
+need to match one of a profile's `labels` in `configs/runner.yaml`:
+
+```yaml
+runs-on: [self-hosted, erp-sport-amd64]
+```
+
+The platform — not the developer — decides AMI, instance type, Spot strategy, subnet, security group, IAM role, runner group, and registration token.
+
+## Repository layout
+
+```text
+cmd/                              Lambda entrypoints: webhook, provision, cleanup
+internal/                         Domain logic: config, github, runner, aws, store, webhook, cleanup
+configs/runner.yaml               Single source of truth: app policy AND infra settings
+infrastructure/modules/github-runner-on-aws/  The one Terraform module — every AWS resource this project needs
+infrastructure/root.hcl                Shared Terragrunt config: S3 state backend (native locking, no DynamoDB)
+infrastructure/environments/main/terragrunt.hcl  The single environment: reads runner.yaml, calls the module
+scripts/                          build.sh, package.sh, deploy.sh
+src_backup/                       Prior implementation — reference only, not part of this build
+```
+
+## Setup
+
+**Full walkthrough: [docs/SETUP.md](./docs/SETUP.md)** — create the GitHub
+App, configure `configs/runner.yaml`, deploy with Terragrunt, populate
+secrets, and verify end-to-end. Condensed version:
+
+1. Create a GitHub App (App ID, private key, webhook secret) — see [request-github-runner-token-architecture.md](./docs/infrastructure/request-github-runner-token-architecture.md). Install it on the target organization/repository.
+2. Edit [configs/runner.yaml](./configs/runner.yaml) — the single source of truth for both the app policy (`github`/`webhook`/`runner`: App ID, secret names, scope/group, profiles and their labels) and the deployment knobs (`infrastructure.main`: region, existing-VPC IDs, Lambda timeouts, tags) that `infrastructure/environments/main/terragrunt.hcl` reads and passes to the Terraform module. Every field is documented inline (Helm `values.yaml`-style `-- comment` convention).
+3. Copy [configs/secrets-example.yaml](./configs/secrets-example.yaml) to `configs/secrets.yaml` and fill in the GitHub App's private key and webhook secret from step 1. This file is gitignored and never committed; Terraform reads it and applies both secrets' values directly.
+4. Fill in your state bucket/region in `infrastructure/root.hcl` (this is the one thing that can't come from `configs/runner.yaml` — Terraform's backend block can't read a file that might itself be the file telling it where to find its state).
+5. Build and deploy:
+
+   ```sh
+   make deploy-plan   # builds + packages Lambdas, then terragrunt plan
+   make deploy-apply  # ... then terragrunt apply
+   ```
+
+   This also writes both secrets' values to Secrets Manager — no separate step needed.
+6. Point the GitHub App's webhook URL at the `webhook_url` output (`cd infrastructure/environments/main && terragrunt output -raw webhook_url`).
 
 ## Requirements
-- AWS Account with appropriate permissions.
-- GitHub account with repository access or organization access.
-- Terraform v1.0 or later.
-- AWS CLI configured with appropriate credentials.
-- Docker installed on the local machine.
 
-## Usage
-Once the setup is complete, the GitHub runners will automatically scale based on the CI/CD workload. You can monitor and manage the runners through the AWS Management Console and GitHub repository settings. Follow these documents to install:
-
-1. [Install AutoRunner - Worker](./src/lambda-runner-worker/README.md)
-2. [Install AutoRunner - API](./src/lambda-runner-api/README.md)
+- Go 1.26+ (see go.mod)
+- Terraform >= 1.10 (native S3 state locking), AWS provider ~> 5.0
+- Terragrunt >= 1.1
+- AWS account with appropriate permissions
+- A GitHub App installed on the target organization or repository
 
 ## Log
-You can view logs through AWS CloudWatch - Log Groups:
-```
-/aws/lambda/autorunner
-/aws/lambda/autorunner-worker
-```
+
+CloudWatch Log Groups: `/aws/lambda/<project_name>-main-webhook`, `-provision`, `-cleanup`.
 
 ## Contributing
-Contributions are welcome! Please create pull request to this repository.
+
+Contributions are welcome! Please create a pull request to this repository.
 
 ## License
+
 This project is licensed under the MIT License. See the LICENSE file for more details.

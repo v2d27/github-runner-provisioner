@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "infrastructure/**"
+      - "docs/**"
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "infrastructure/**"
+      - "docs/**"
+      - "**.md"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Format check
+        run: |
+          diff <(gofmt -l .) <(echo -n "")
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build (all cmd/* Lambdas)
+        run: ./scripts/build.sh
+
+      - name: Test
+        run: go test ./...
