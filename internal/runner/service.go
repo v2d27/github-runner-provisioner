@@ -3,11 +3,28 @@ package runner
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.me/v2d27/github-runner-provisioner/internal/aws"
 	"github.me/v2d27/github-runner-provisioner/internal/config"
 	ghclient "github.me/v2d27/github-runner-provisioner/internal/github"
 	"github.me/v2d27/github-runner-provisioner/internal/store"
+)
+
+// A "no idle slot" result from AllocateIdleRunner is often transient rather
+// than a genuine capacity shortage: BindToJob promotes a freshly provisioned
+// instance's non-triggering slots to IDLE immediately, and a completing
+// job's own slot is freed by handleCompleted independently — so two jobs of
+// the same profile queuing within the same event-processing tick can easily
+// see zero idle slots for an instant even though one is about to free up.
+// allocationRetryWindow/allocationRetryInterval bound how long handleQueued
+// waits for that to resolve before concluding new EC2 capacity is actually
+// needed — cheap next to how long an instance takes to boot, so it's worth
+// waiting out first. Comfortably inside runner.provision_lambda_timeout
+// (default 60s).
+const (
+	allocationRetryWindow   = 5 * time.Second
+	allocationRetryInterval = 500 * time.Millisecond
 )
 
 // GitHub workflow_job actions this platform reacts to. Any other action
@@ -94,7 +111,7 @@ func (s *Service) handleQueued(ctx context.Context, ev Event) error {
 		return nil
 	}
 
-	runner, allocated, err := s.store.AllocateIdleRunner(ctx, sel, job)
+	runner, allocated, err := s.allocateIdleRunnerWithRetry(ctx, sel, job)
 	if err != nil {
 		return err
 	}
@@ -117,6 +134,33 @@ func (s *Service) handleQueued(ctx context.Context, ev Event) error {
 	}
 
 	return s.provisionRunner(ctx, sel, profile, job)
+}
+
+// allocateIdleRunnerWithRetry re-queries the idle pool for up to
+// allocationRetryWindow before giving up. See the doc comment on
+// allocationRetryWindow for why an initial "no idle slot" result doesn't
+// necessarily mean new EC2 capacity is needed.
+func (s *Service) allocateIdleRunnerWithRetry(ctx context.Context, sel store.PoolSelector, job *store.Job) (*store.Runner, bool, error) {
+	deadline := time.Now().Add(allocationRetryWindow)
+
+	for attempt := 0; ; attempt++ {
+		runner, allocated, err := s.store.AllocateIdleRunner(ctx, sel, job)
+		if err != nil || allocated {
+			return runner, allocated, err
+		}
+		if !time.Now().Before(deadline) {
+			if attempt > 0 {
+				s.logger.Info("runner: no idle slot freed up within retry window, provisioning new instance", "job_id", job.JobID, "attempts", attempt+1)
+			}
+			return nil, false, nil
+		}
+
+		select {
+		case <-time.After(allocationRetryInterval):
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
 }
 
 func (s *Service) handleInProgress(ctx context.Context, ev Event) error {
