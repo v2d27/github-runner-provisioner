@@ -5,10 +5,10 @@ include "root" {
 locals {
   env_key       = "main"
   repo_root     = get_repo_root()
-  runner_config = yamldecode(file("${local.repo_root}/configs/runner.local.yaml"))
+  runner_config = yamldecode(file("${local.repo_root}/configs/runner.yaml"))
   infra         = local.runner_config.infrastructure[local.env_key]
 
-  secrets = yamldecode(file("${local.repo_root}/configs/secrets.local.yaml"))
+  secrets = yamldecode(file("${local.repo_root}/configs/secrets.yaml"))
 }
 
 terraform {

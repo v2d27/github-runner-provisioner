@@ -7,7 +7,7 @@
 ![shield](https://img.shields.io/badge/Language-Go-00ADD8)
 ![shield](https://img.shields.io/badge/Type-spot_instance-purple)
 
-**Contents:** [Purpose](#purpose) · [Architecture](#architecture) · [Repository layout](#repository-layout) · [Setup](#setup) · [Requirements](#requirements) · [Logs](#log)
+**Contents:** [Purpose](#purpose) · [Architecture](#architecture) · [Repository layout](#repository-layout) · [Use as a Terraform module](#use-as-a-terraform-module) · [Setup](#setup) · [Requirements](#requirements) · [Logs](#log)
 
 ## Purpose
 
@@ -63,13 +63,47 @@ cmd/                              Lambda entrypoints: webhook, provision, cleanu
 internal/                         Domain logic: config, github, runner, aws, store, webhook, cleanup, ready
 configs/runner.yaml               Checked-in template: app policy AND infra settings (copy to runner.local.yaml before editing)
 configs/secrets.yaml              Checked-in template for the two GitHub secrets (copy to secrets.local.yaml before editing)
-infrastructure/modules/github-runner-on-aws/  The one Terraform module — every AWS resource this project needs
+main.tf, variables.tf, outputs.tf, versions.tf  Root passthrough module — wraps infrastructure/modules/github-runner-on-aws so this repo can be used as a Terraform module directly from its root (see below)
+infrastructure/modules/github-runner-on-aws/  The one real Terraform module — every AWS resource this project needs
 infrastructure/root.hcl                Shared Terragrunt config: S3 state backend (native locking, no DynamoDB)
 infrastructure/environments/main/terragrunt.hcl  The single environment: reads runner.local.yaml + secrets.local.yaml, calls the module
 lambda/                           Build output (gitignored): bootstrap binaries + zips from scripts/build.sh + package.sh
 scripts/                          build.sh, package.sh, deploy.sh
 src_backup/                       Prior implementation — reference only, not part of this build
 ```
+
+## Use as a Terraform module
+
+The root of this repo (`main.tf`/`variables.tf`/`outputs.tf`/`versions.tf`) is a
+thin passthrough that forwards straight to
+[infrastructure/modules/github-runner-on-aws](./infrastructure/modules/github-runner-on-aws) —
+the actual resources always live there. The passthrough exists so another
+project can depend on this repo without knowing about that internal path:
+clone/vendor it under your own `modules/` directory and reference the repo
+root as the source, e.g.:
+
+```hcl
+module "github_runner" {
+  source = "git::https://github.com/<org>/github-runner-provisioner.git?ref=<tag>"
+  # or, if vendored locally: source = "./modules/github-runner-provisioner"
+
+  environment                        = "prod"
+  runner_config_json                 = jsonencode({ github = ..., webhook = ..., runner = ... })
+  github_app_private_key_secret_name = "github-runner/app/private-key"
+  webhook_secret_name                = "github-runner/webhook/secret"
+  github_app_private_key             = var.github_app_private_key
+  webhook_secret_value               = var.webhook_secret_value
+  build_dir                          = "${path.module}/lambda"
+}
+```
+
+All inputs/outputs are documented in
+[infrastructure/modules/github-runner-on-aws/variables.tf](./infrastructure/modules/github-runner-on-aws/variables.tf)
+and [outputs.tf](./infrastructure/modules/github-runner-on-aws/outputs.tf). This
+project's own deployment (see [Setup](#setup) below) calls the nested module
+directly via Terragrunt instead of going through the root passthrough — the
+two paths are equivalent, Terragrunt just needed a stable path to pin before
+this passthrough existed.
 
 ## Setup
 
