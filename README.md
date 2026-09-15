@@ -7,9 +7,17 @@
 ![shield](https://img.shields.io/badge/Language-Go-00ADD8)
 ![shield](https://img.shields.io/badge/Type-spot_instance-purple)
 
+**Contents:** [Purpose](#purpose) · [Architecture](#architecture) · [Repository layout](#repository-layout) · [Setup](#setup) · [Requirements](#requirements) · [Logs](#log)
+
 ## Purpose
 
-This project provisions self-hosted GitHub Actions runners on-demand in AWS: event-driven, idempotent, and enterprise-grade. It replaces an earlier Python/TypeScript prototype (kept for reference, untouched, in [src_backup/](./src_backup)) with a Go implementation built around three Lambda functions, a single DynamoDB table for state, and a GitHub App for authentication — **no personal access token, ever**.
+This project provisions self-hosted GitHub Actions runners on-demand in AWS: event-driven, idempotent, and enterprise-grade.
+
+- **Go implementation** built around three Lambda functions (webhook, provision, cleanup) and a single DynamoDB table for state.
+- **GitHub App authentication** — no personal access token, ever.
+- Replaces an earlier Python/TypeScript prototype, kept untouched for reference in [src_backup/](./src_backup).
+
+See also: [Cost estimate for expected monthly AWS spend](./docs/infrastructure/cost-estimate-2026.md).
 
 ## Architecture
 
@@ -63,8 +71,10 @@ App, configure `configs/runner.yaml`, deploy with Terragrunt, populate
 secrets, and verify end-to-end. Condensed version:
 
 1. Create a GitHub App (App ID, private key, webhook secret) — see [request-github-runner-token-architecture.md](./docs/infrastructure/request-github-runner-token-architecture.md). Install it on the target organization/repository.
-2. Edit [configs/runner.yaml](./configs/runner.yaml) — the single source of truth for both the app policy (`github`/`webhook`/`runner`: App ID, secret names, scope/group, profiles and their labels) and the deployment knobs (`infrastructure.main`: region, existing-VPC IDs, Lambda timeouts, tags) that `infrastructure/environments/main/terragrunt.hcl` reads and passes to the Terraform module. Every field is documented inline (Helm `values.yaml`-style `-- comment` convention).
-3. Copy [configs/secrets-example.yaml](./configs/secrets-example.yaml) to `configs/secrets.yaml` and fill in the GitHub App's private key and webhook secret from step 1. This file is gitignored and never committed; Terraform reads it and applies both secrets' values directly.
+2. Edit [configs/runner.yaml](./configs/runner.yaml) — the single source of truth for this project. Every field is documented inline (Helm `values.yaml`-style `-- comment` convention). It covers two things:
+   - **App policy** (`github`/`webhook`/`runner`): App ID, secret names, scope/group, profiles and their labels.
+   - **Deployment knobs** (`infrastructure.main`): region, existing-VPC IDs, Lambda timeouts, tags — read by `infrastructure/environments/main/terragrunt.hcl` and passed to the Terraform module.
+3. Copy [configs/secrets.yaml](./configs/secrets.yaml) to `configs/secrets.local.yaml` and fill in the GitHub App's private key and webhook secret from step 1. This file is gitignored and never committed — Terraform reads it and applies both secrets' values directly.
 4. Fill in your state bucket/region in `infrastructure/root.hcl` (this is the one thing that can't come from `configs/runner.yaml` — Terraform's backend block can't read a file that might itself be the file telling it where to find its state).
 5. Build and deploy:
 

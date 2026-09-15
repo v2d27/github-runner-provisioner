@@ -5,18 +5,16 @@ include "root" {
 locals {
   env_key       = "main"
   repo_root     = get_repo_root()
-  runner_config = yamldecode(file("${local.repo_root}/configs/runner.yaml"))
+  runner_config = yamldecode(file("${local.repo_root}/configs/runner.local.yaml"))
   infra         = local.runner_config.infrastructure[local.env_key]
 
-  secrets = yamldecode(file("${local.repo_root}/configs/secrets.yaml"))
+  secrets = yamldecode(file("${local.repo_root}/configs/secrets.local.yaml"))
 }
 
 terraform {
   source = "${get_repo_root()}/infrastructure/modules/github-runner-on-aws"
 }
 
-# Provider config is generated here (not committed as a static .tf file)
-# because region/tags come from configs/runner.yaml.
 generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite"

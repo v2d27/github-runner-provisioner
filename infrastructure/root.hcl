@@ -7,7 +7,7 @@
 # 1.10) instead of a separate DynamoDB lock table — one less resource to
 # provision and pay for just to run `terraform apply`.
 locals {
-  state_bucket = "CHANGEME-terraform-state"
+  state_bucket = "github-runner-terraform-state"
   state_region = "ap-southeast-1"
 }
 
@@ -19,7 +19,7 @@ remote_state {
   }
   config = {
     bucket       = local.state_bucket
-    key          = "provision-github-runner-on-demand/${path_relative_to_include()}/terraform.tfstate"
+    key          = "github-runner-provisioner/${path_relative_to_include()}/terraform.tfstate"
     region       = local.state_region
     encrypt      = true
     use_lockfile = true

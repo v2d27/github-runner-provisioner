@@ -5,11 +5,9 @@ on:
     branches: [main]
     paths:
       - "infrastructure/**"
-      - "configs/runner.yaml"
   pull_request:
     paths:
       - "infrastructure/**"
-      - "configs/runner.yaml"
 
 jobs:
   fmt-and-validate:
