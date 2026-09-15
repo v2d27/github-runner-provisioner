@@ -1,8 +1,4 @@
-# Root passthrough module — lets a consumer reference this repo's root
-# directly as a module source (git::.../github-runner-provisioner.git or a
-# local clone under their own modules/ dir) instead of having to know about
-# the internal infrastructure/modules/github-runner-on-aws layout. All actual
-# resources live in that nested module; this file only forwards inputs/outputs.
+# Root passthrough module
 module "github_runner_on_aws" {
   source = "./infrastructure/modules/github-runner-on-aws"
 
