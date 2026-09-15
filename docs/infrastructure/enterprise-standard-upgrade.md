@@ -1,15 +1,15 @@
 # enterprise-standard-upgrade
 
-Dưới đây là **complete architecture + implementation workflow** cho `github-runner-provisioner`, đã tích hợp **2 requirement mới**:
+Below is the **complete architecture + implementation workflow** for `github-runner-provisioner`, integrating **2 new requirements**:
 
-1. **Runner labels trong workflow bắt buộc phải chứa configurable prefix**.
-2. **Platform có thể cấu hình GitHub Runner Group**; `empty` = GitHub Default Runner Group.
+1. **Runner labels in the workflow must contain a configurable prefix**.
+2. **The platform can configure the GitHub Runner Group**; `empty` = GitHub Default Runner Group.
 3. this repository is onetime setup, end user can configure via yaml file before applying to AWS infrastructure
 4. Use golang for all lambda function
 5. EC2 can be provisioned to the existing infrastructure or deploy new infrastructure
 6. the final structure: Lamda function controller will receive the event from github via github apps, never call to github to proceed the ec2. Only allow to request GitHub to get github runner token via github app.
 
-Mục tiêu kiến trúc là **enterprise-grade, event-driven, idempotent, scalable**, đồng thời vẫn giữ mô hình **runner pool + 5-minute idle reuse**.
+The architecture goal is **enterprise-grade, event-driven, idempotent, scalable**, while still keeping the **runner pool + 5-minute idle reuse** model.
 
 ---
 
@@ -133,9 +133,9 @@ Mục tiêu kiến trúc là **enterprise-grade, event-driven, idempotent, scala
 
 ## 2. Core Design Principle
 
-Workflow **không gọi API provision runner**.
+The workflow **does not call the runner provisioning API**.
 
-Developer chỉ khai báo capability:
+The developer only declares capability:
 
 ```yaml
 jobs:
@@ -147,7 +147,7 @@ jobs:
       - amd64
 ```
 
-Platform sẽ quyết định:
+The platform will decide:
 
 ```text
 erp-sport + linux + amd64
@@ -162,7 +162,7 @@ Runner Profile
         └── Lifecycle = 5-minute idle timeout
 ```
 
-Developer **không được biết hoặc quyết định**:
+The developer **must not know or decide**:
 
 ```text
 AWS instance type
@@ -175,7 +175,7 @@ IAM role
 registration token
 ```
 
-Đây là separation giữa:
+This is the separation between:
 
 ```text
 Developer intent
@@ -189,11 +189,11 @@ AWS infrastructure
 
 ## 3. Requirement #1 — Runner Prefix
 
-Đây là requirement rất quan trọng để tránh controller bắt nhầm job của runner platform khác.
+This is a very important requirement to prevent the controller from mistakenly picking up jobs from another runner platform.
 
 ### Configuration
 
-Ví dụ:
+Example:
 
 ```yaml
 runner:
@@ -210,7 +210,7 @@ runs-on:
   - amd64
 ```
 
-Controller nhận:
+The controller receives:
 
 ```json
 {
@@ -232,7 +232,7 @@ linux             ✓
 amd64             ✓
 ```
 
-Nếu:
+If:
 
 ```yaml
 runs-on:
@@ -241,7 +241,7 @@ runs-on:
   - amd64
 ```
 
-thì:
+then:
 
 ```text
 prefix = erp-sport
@@ -253,15 +253,15 @@ IGNORE
 DO NOT PROVISION
 ```
 
-#### Không nên dùng prefix như partial match
+#### The prefix should not be used as a partial match
 
-Không nên:
+Should not do:
 
 ```text
 strings.Contains(label, "erp-sport")
 ```
 
-Vì:
+Because:
 
 ```text
 erp-sport
@@ -269,9 +269,9 @@ erp-sport-dev
 my-erp-sport
 ```
 
-sẽ gây ambiguity.
+will cause ambiguity.
 
-Nên exact-match:
+Should use exact match:
 
 ```go
 func hasRequiredPrefix(labels []string, prefix string) bool {
@@ -298,13 +298,13 @@ runner:
   group: ""
 ```
 
-`group: ""` nghĩa là:
+`group: ""` means:
 
 ```text
 GitHub Default Runner Group
 ```
 
-Nếu:
+If:
 
 ```yaml
 runner:
@@ -312,13 +312,13 @@ runner:
   group: "aws-spot-runners"
 ```
 
-thì runner phải được register vào:
+then the runner must be registered to:
 
 ```text
 aws-spot-runners
 ```
 
-Ví dụ:
+Example:
 
 ```text
 GitHub Organization
@@ -333,9 +333,9 @@ GitHub Organization
     └── erp-sport-i-003
 ```
 
-**Runner group không nên nằm trong `runs-on`.**
+**The runner group should not be placed inside `runs-on`.**
 
-Không làm:
+Do not do:
 
 ```yaml
 runs-on:
@@ -345,7 +345,7 @@ runs-on:
   - amd64
 ```
 
-Developer chỉ yêu cầu:
+The developer only requests:
 
 ```yaml
 runs-on:
@@ -355,13 +355,13 @@ runs-on:
   - amd64
 ```
 
-Platform quyết định runner group.
+The platform decides the runner group.
 
 ---
 
 ## 5. Configuration Model
 
-Tôi recommend cấu hình như sau:
+I recommend the following configuration:
 
 ```yaml
 runner:
@@ -391,7 +391,7 @@ runner:
       ami: ami-yyyyyyyy
 ```
 
-Sau này có thể:
+Later, this can be extended to:
 
 ```yaml
 profiles:
@@ -424,7 +424,7 @@ runs-on:
   - large
 ```
 
-Controller map:
+Controller mapping:
 
 ```text
 erp-sport
@@ -441,9 +441,9 @@ c7i.xlarge
 
 ## 6. Runner Lifecycle
 
-Runner không dùng `--ephemeral`.
+The runner does not use `--ephemeral`.
 
-Vì requirement hiện tại là **reuse trong 5 phút**.
+Because the current requirement is **reuse within 5 minutes**.
 
 Lifecycle:
 
@@ -549,7 +549,7 @@ deploy queued
 reuse runner #1
 ```
 
-=> **Chỉ cần 1 EC2.**
+=> **Only 1 EC2 is needed.**
 
 ---
 
@@ -579,7 +579,7 @@ jobs:
       - arm64
 ```
 
-Controller thấy:
+The controller sees:
 
 ```text
 amd64 = 2 jobs
@@ -611,15 +611,15 @@ Provision:
 
 ## 9. Controller Reconciliation
 
-Đây là phần quan trọng nhất.
+This is the most important part.
 
-Controller không đơn giản:
+The controller does not simply:
 
 ```text
 job queued → create EC2
 ```
 
-Mà phải:
+But must:
 
 ```text
 GitHub event
@@ -631,7 +631,7 @@ Current state
 Reconcile
 ```
 
-Công thức:
+Formula:
 
 ```text
 required capacity
@@ -643,7 +643,7 @@ pending capacity
 new capacity required
 ```
 
-Ví dụ:
+Example:
 
 ```text
 desired = 3
@@ -660,7 +660,7 @@ create = 3 - 2 = 1
 
 ## 10. Atomic Allocation
 
-Hai Lambda có thể chạy đồng thời:
+Two Lambdas may run concurrently:
 
 ```text
 Lambda A ─────┐
@@ -668,7 +668,7 @@ Lambda A ─────┐
 Lambda B ─────┘
 ```
 
-Không được để cả hai provision runner.
+Both must not be allowed to provision a runner.
 
 DynamoDB conditional update:
 
@@ -678,7 +678,7 @@ IDLE
 BUSY
 ```
 
-chỉ một Lambda được phép thành công.
+only one Lambda is allowed to succeed.
 
 Concept:
 
@@ -693,21 +693,21 @@ UpdateItem(
 )
 ```
 
-Lambda còn lại:
+The other Lambda:
 
 ```text
 ConditionalCheckFailed
         ↓
-runner đã được allocate
+runner already allocated
         ↓
-reconcile lại
+reconcile again
 ```
 
 ---
 
 ## 11. DynamoDB Model
 
-Tôi recommend tách entity rõ ràng.
+I recommend clearly separating entities.
 
 ### Runner
 
@@ -785,23 +785,23 @@ Tôi recommend tách entity rõ ràng.
 
 ## 13. Idempotency
 
-GitHub webhook có thể retry.
+GitHub webhooks can retry.
 
-Do đó:
+Therefore:
 
 ```text
 delivery_id
 ```
 
-phải được lưu.
+must be stored.
 
-Ví dụ:
+Example:
 
 ```text
 pk = EVENT#github-delivery-id
 ```
 
-Nếu event đã tồn tại:
+If the event already exists:
 
 ```text
 duplicate
@@ -811,7 +811,7 @@ ACK
 do nothing
 ```
 
-Không provision lần nữa.
+Do not provision again.
 
 ---
 
@@ -917,7 +917,7 @@ PROCESS
 
 ## 16. Profile Resolution
 
-Không nên hard-code:
+Should not hard-code:
 
 ```go
 if arch == "amd64" {
@@ -925,7 +925,7 @@ if arch == "amd64" {
 }
 ```
 
-Tách thành resolver:
+Split into a resolver:
 
 ```go
 type RunnerProfile struct {
@@ -943,7 +943,7 @@ Resolver:
 profile, err := profileResolver.Resolve(labels)
 ```
 
-Ví dụ:
+Example:
 
 ```text
 [self-hosted, erp-sport, linux, amd64]
@@ -981,19 +981,19 @@ Concept:
   --unattended
 ```
 
-Nếu:
+If:
 
 ```text
 group = ""
 ```
 
-thì **không truyền runner group override**, để GitHub sử dụng Default group.
+then **do not pass a runner group override**, so GitHub uses the Default group.
 
 ---
 
 ## 18. GitHub App Authentication
 
-Không dùng PAT.
+Do not use a PAT.
 
 Flow:
 
@@ -1018,7 +1018,7 @@ AWS Secrets Manager
 └── github/app/private-key
 ```
 
-Lambda chỉ cần permission:
+The Lambda only needs permission:
 
 ```text
 secretsmanager:GetSecretValue
@@ -1107,9 +1107,9 @@ TerminateInstances
 TERMINATED
 ```
 
-Quan trọng: trước khi terminate phải re-check.
+Important: must re-check before terminating.
 
-Ví dụ:
+Example:
 
 ```text
 22:00 runner IDLE
@@ -1120,31 +1120,31 @@ new job arrives
 runner → BUSY
 ```
 
-Cleanup lúc:
+Cleanup at:
 
 ```text
 22:05
 ```
 
-phải thấy:
+must see:
 
 ```text
 status != IDLE
 ```
 
-→ không terminate.
+→ do not terminate.
 
 ---
 
 ## 21. GitHub Runner Group Validation
 
-Khi config:
+When configured:
 
 ```yaml
 group: "aws-spot-runners"
 ```
 
-controller nên validate group tồn tại trước khi provision.
+the controller should validate that the group exists before provisioning.
 
 ```text
 config loaded
@@ -1158,7 +1158,7 @@ runner group exists?
      └── NO → fail configuration
 ```
 
-Không nên để:
+Should not allow:
 
 ```text
 EC2 created
@@ -1168,13 +1168,13 @@ runner registration failed
 orphan EC2
 ```
 
-Có thể cache group ID/name trong DynamoDB/config cache.
+The group ID/name can be cached in DynamoDB/config cache.
 
 ---
 
 ## 22. Repository / Organization Scope
 
-Config nên hỗ trợ:
+Config should support:
 
 ```yaml
 runner:
@@ -1183,14 +1183,14 @@ runner:
   scope: repository
 ```
 
-hoặc:
+or:
 
 ```yaml
 runner:
   scope: organization
 ```
 
-Ví dụ repository:
+Repository example:
 
 ```text
 github.com/company/erp-sport
@@ -1208,7 +1208,7 @@ Organization:
 https://github.com/company
 ```
 
-Controller phải giữ scope trong DynamoDB để tránh allocate nhầm runner giữa các repository.
+The controller must keep the scope in DynamoDB to avoid mistakenly allocating runners across repositories.
 
 ---
 
@@ -1296,7 +1296,7 @@ github-runner-provisioner/
 
 ## 24. Implementation Workflow
 
-Tôi recommend implement theo **10 phases**, không làm tất cả cùng lúc.
+I recommend implementing in **10 phases**, not all at once.
 
 ### Phase 1 — Domain model
 
@@ -1639,7 +1639,7 @@ GitHub API errors
 
 ## 32. Spot Interruption
 
-Enterprise architecture nên xử lý:
+Enterprise architecture should handle:
 
 ```text
 EC2 Spot
@@ -1657,13 +1657,13 @@ controller detects job still queued
 provision replacement
 ```
 
-Không cố giữ Spot instance khi AWS đã chuẩn bị terminate.
+Do not try to keep the Spot instance when AWS has already prepared to terminate it.
 
 ---
 
 ## 33. Failure Scenarios
 
-### Lambda chạy 2 lần
+### Lambda runs twice
 
 ```text
 DynamoDB conditional write
@@ -1679,7 +1679,7 @@ delivery_id
 
 → idempotent.
 
-### EC2 created nhưng registration fail
+### EC2 created but registration fails
 
 ```text
 PROVISIONING
@@ -1691,7 +1691,7 @@ terminate EC2
 mark FAILED
 ```
 
-### Runner chết trước khi job complete
+### Runner dies before job completes
 
 Controller:
 
@@ -1705,7 +1705,7 @@ workflow_job state
 
 reconcile.
 
-### Cleanup race với new job
+### Cleanup race with new job
 
 ```text
 Cleanup:
@@ -1714,7 +1714,7 @@ IDLE → TERMINATING
 
 conditional update.
 
-Nếu job allocation đã:
+If job allocation has already:
 
 ```text
 IDLE → BUSY
@@ -1726,7 +1726,7 @@ cleanup fail condition.
 
 ## 34. Final State Model
 
-Tôi recommend final state machine:
+I recommend the final state machine:
 
 ```text
                     ┌──────────────┐
@@ -1846,7 +1846,7 @@ jobs:
 
 ## 36. Enterprise-Level Final Architecture
 
-Tóm lại, hệ thống nên được nhìn như:
+In summary, the system should be viewed as:
 
 ```text
                      GITHUB ACTIONS
@@ -1917,7 +1917,7 @@ Tóm lại, hệ thống nên được nhìn như:
         EC2 terminate
 ```
 
-**Hai requirement mới nằm đúng ở control plane**, không làm workflow phức tạp:
+**The two new requirements sit exactly at the control plane**, without complicating the workflow:
 
 ```text
                     workflow_job
@@ -1943,4 +1943,4 @@ Tóm lại, hệ thống nên được nhìn như:
                     Reconcile
 ```
 
-**Thứ tự implement thực tế tôi khuyên:** `Domain model → Config → GitHub App → Webhook/SQS → Prefix/Profile resolver → Runner Group → DynamoDB state/locking → Controller → EC2 provisioning → Cleanup → Spot recovery → Observability → integration tests`. Điều này giúp tránh việc viết EC2 provisioning trước khi scheduling/state model ổn định.
+**Recommended actual implementation order:** `Domain model → Config → GitHub App → Webhook/SQS → Prefix/Profile resolver → Runner Group → DynamoDB state/locking → Controller → EC2 provisioning → Cleanup → Spot recovery → Observability → integration tests`. This helps avoid writing EC2 provisioning before the scheduling/state model is stable.

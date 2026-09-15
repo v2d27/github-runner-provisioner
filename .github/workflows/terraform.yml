@@ -12,7 +12,13 @@ on:
 jobs:
   fmt-and-validate:
     runs-on: ubuntu-latest
+    outputs:
+      aws_configured: ${{ steps.check-aws.outputs.configured }}
     steps:
+      - name: Check whether AWS OIDC role is configured
+        id: check-aws
+        run: echo "configured=${{ secrets.AWS_ROLE_TO_ASSUME != '' }}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
 
       - uses: hashicorp/setup-terraform@v3
@@ -33,11 +39,6 @@ jobs:
       - name: Validate Terragrunt HCL
         run: terragrunt hcl validate --working-dir infrastructure
 
-      # `terraform validate` on the module directly, not `terragrunt
-      # validate` — the latter runs `terraform init` against the real S3
-      # state backend, which doesn't exist yet for a repo that hasn't been
-      # deployed. This still fully validates the module's HCL/types without
-      # needing AWS credentials or a state bucket.
       - name: Validate Terraform module
         working-directory: infrastructure/modules/github-runner-on-aws
         run: |
@@ -50,7 +51,7 @@ jobs:
   # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services).
   plan:
     needs: fmt-and-validate
-    if: ${{ secrets.AWS_ROLE_TO_ASSUME != '' }}
+    if: ${{ needs.fmt-and-validate.outputs.aws_configured == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
