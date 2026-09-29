@@ -19,7 +19,7 @@
 //	GSI2 (status timeline):     gsi2pk=RUNNER#STATUS#<status> or JOB#STATUS#<status>, gsi2sk=<unix seconds>
 //	                            — Runner PROVISIONING only (cleanup's stuck-provisioning sweep;
 //	                              the per-slot-idle/auto_terminating_time sweep instead scans
-//	                              ACTIVE instances directly — see ListActiveInstances),
+//	                              ACTIVE/TERMINATING instances directly — see ListLiveInstances),
 //	                              Job QUEUED/PROVISIONING (defense-in-depth sweep).
 //	GSI3 (instance lookup):     gsi3pk=INSTANCE#<instance_id>, gsi3sk=STATE
 //	                            — Runner only, once instance_id is known.
@@ -72,6 +72,11 @@ type Client struct {
 func New(cfg aws.Config, tableName string, recordTTL time.Duration) *Client {
 	return &Client{ddb: dynamodb.NewFromConfig(cfg), table: tableName, recordTTL: recordTTL}
 }
+
+// TableName is the backing table's name — unique per deployment, so it
+// doubles as the deployment identifier runner instances are tagged with
+// (see aws.TagDeployment).
+func (c *Client) TableName() string { return c.table }
 
 func runnerPK(runnerID string) string  { return "RUNNER#" + runnerID }
 func jobPK(jobID int64) string         { return fmt.Sprintf("JOB#%d", jobID) }

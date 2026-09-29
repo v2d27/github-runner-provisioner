@@ -424,14 +424,18 @@ func (c *Client) AllocateIdleRunner(ctx context.Context, sel PoolSelector, job *
 							"pk": &types.AttributeValueMemberS{Value: runnerPK(candidate.RunnerID)},
 							"sk": &types.AttributeValueMemberS{Value: stateSK},
 						},
-						ConditionExpression:      aws.String(fmt.Sprintf("slots[%d].#status = :idle", claimIdx)),
+						// #status = :active guards against a GSI1 read (eventually
+						// consistent) still returning a runner cleanup has
+						// already moved to TERMINATING.
+						ConditionExpression:      aws.String(fmt.Sprintf("#status = :active AND slots[%d].#status = :idle", claimIdx)),
 						UpdateExpression:         aws.String(runnerUpdateExpr),
 						ExpressionAttributeNames: map[string]string{"#status": "status"},
 						ExpressionAttributeValues: map[string]types.AttributeValue{
-							":idle":  &types.AttributeValueMemberS{Value: string(SlotIdle)},
-							":busy":  &types.AttributeValueMemberS{Value: string(SlotBusy)},
-							":jobID": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.JobID)},
-							":wfID":  &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.WorkflowRunID)},
+							":active": &types.AttributeValueMemberS{Value: string(RunnerActive)},
+							":idle":   &types.AttributeValueMemberS{Value: string(SlotIdle)},
+							":busy":   &types.AttributeValueMemberS{Value: string(SlotBusy)},
+							":jobID":  &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.JobID)},
+							":wfID":   &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", job.WorkflowRunID)},
 						},
 					},
 				},
@@ -477,6 +481,11 @@ func (c *Client) AllocateIdleRunner(ctx context.Context, sel PoolSelector, job *
 // pool this runner belongs to (from the completed Job row) so the GSI1 pool
 // entry can be (re)populated — this slot is now available regardless of any
 // sibling slot's state.
+//
+// Only an ACTIVE runner is ever put back in the pool: a completion arriving
+// after cleanup already moved the instance to TERMINATING/TERMINATED is
+// swallowed like any other lost race, rather than re-adding a dying
+// instance to GSI1.
 func (c *Client) MarkIdle(ctx context.Context, runnerID string, slotIndex int, sel PoolSelector, idleTimeout time.Duration) error {
 	now := time.Now()
 	terminateAfter := now.Add(idleTimeout).Unix()
@@ -486,7 +495,7 @@ func (c *Client) MarkIdle(ctx context.Context, runnerID string, slotIndex int, s
 			"pk": &types.AttributeValueMemberS{Value: runnerPK(runnerID)},
 			"sk": &types.AttributeValueMemberS{Value: stateSK},
 		},
-		ConditionExpression: aws.String(fmt.Sprintf("slots[%d].#status = :busy", slotIndex)),
+		ConditionExpression: aws.String(fmt.Sprintf("#status = :active AND slots[%d].#status = :busy", slotIndex)),
 		UpdateExpression: aws.String(fmt.Sprintf(
 			"SET slots[%d].#status = :idle, slots[%d].idle_since = :now, slots[%d].terminate_after = :term, gsi1pk = :gsi1pk, gsi1sk = :gsi1sk "+
 				"REMOVE slots[%d].job_id, slots[%d].workflow_run_id",
@@ -494,6 +503,7 @@ func (c *Client) MarkIdle(ctx context.Context, runnerID string, slotIndex int, s
 		)),
 		ExpressionAttributeNames: map[string]string{"#status": "status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":active": &types.AttributeValueMemberS{Value: string(RunnerActive)},
 			":busy":   &types.AttributeValueMemberS{Value: string(SlotBusy)},
 			":idle":   &types.AttributeValueMemberS{Value: string(SlotIdle)},
 			":now":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now.Unix())},
@@ -555,24 +565,28 @@ func (c *Client) FindRunnerByInstanceID(ctx context.Context, instanceID string) 
 	return &r, nil
 }
 
-// ListActiveInstances returns every Runner row currently ACTIVE — the
-// candidate set cleanup's per-slot-idle-timeout and auto_terminating_time
-// checks run over (see internal/cleanup.eligibleForTermination). A Scan
-// (rather than a GSI query) is deliberate: with independent per-slot
-// idle/expiry state, "every slot idle, each past its own terminate_after,
-// OR the instance older than auto_terminating_time" isn't representable as
-// a single GSI sort key. At this platform's scale (a 3-minute sweep over,
-// realistically, tens of concurrently live instances) a filtered Scan is
-// simpler to reason about than maintaining a second derived multi-slot GSI.
-func (c *Client) ListActiveInstances(ctx context.Context) ([]*Runner, error) {
+// ListLiveInstances returns every Runner row currently ACTIVE or
+// TERMINATING — the candidate set cleanup's per-slot-idle-timeout and
+// auto_terminating_time checks run over (see
+// internal/cleanup.eligibleForTermination), plus every termination still in
+// flight that the sweep must drive to completion (see
+// internal/cleanup.finishTermination). A Scan (rather than a GSI query) is
+// deliberate: with independent per-slot idle/expiry state, "every slot idle,
+// each past its own terminate_after, OR the instance older than
+// auto_terminating_time" isn't representable as a single GSI sort key. At
+// this platform's scale (a 3-minute sweep over, realistically, tens of
+// concurrently live instances) a filtered Scan is simpler to reason about
+// than maintaining a second derived multi-slot GSI.
+func (c *Client) ListLiveInstances(ctx context.Context) ([]*Runner, error) {
 	var runners []*Runner
 	input := &dynamodb.ScanInput{
 		TableName:                aws.String(c.table),
-		FilterExpression:         aws.String("entity_type = :runner AND #status = :active"),
+		FilterExpression:         aws.String("entity_type = :runner AND #status IN (:active, :terminating)"),
 		ExpressionAttributeNames: map[string]string{"#status": "status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":runner": &types.AttributeValueMemberS{Value: "RUNNER"},
-			":active": &types.AttributeValueMemberS{Value: string(RunnerActive)},
+			":runner":      &types.AttributeValueMemberS{Value: "RUNNER"},
+			":active":      &types.AttributeValueMemberS{Value: string(RunnerActive)},
+			":terminating": &types.AttributeValueMemberS{Value: string(RunnerTerminating)},
 		},
 	}
 	for {
@@ -629,25 +643,39 @@ func (c *Client) queryStatusTimeline(ctx context.Context, gsi2pk string, maxUnix
 // TransitionToTerminating conditionally moves a runner into TERMINATING from
 // any non-terminal state, dropping it out of the allocation pool and status
 // timeline GSIs. Returns false (not an error) if the runner already left the
-// state the caller observed — e.g. a job claimed a slot between the cleanup
-// sweep's read and this write.
-func (c *Client) TransitionToTerminating(ctx context.Context, runnerID string) (bool, error) {
+// state the caller observed.
+//
+// observed, when non-nil, is the caller's snapshot of the runner's slots:
+// the transition additionally requires every slot's status to still match
+// it, so a job that claimed a slot (AllocateIdleRunner) between the cleanup
+// sweep's read and this write makes this a safe no-op instead of tearing the
+// instance down under a freshly allocated job. Callers that must terminate
+// regardless of slot state (spot interruption, failed boots) pass nil.
+func (c *Client) TransitionToTerminating(ctx context.Context, runnerID string, observed []Slot) (bool, error) {
+	condition := "#status IN (:provisioning, :active)"
+	values := map[string]types.AttributeValue{
+		":provisioning": &types.AttributeValueMemberS{Value: string(RunnerProvisioning)},
+		":active":       &types.AttributeValueMemberS{Value: string(RunnerActive)},
+		":terminating":  &types.AttributeValueMemberS{Value: string(RunnerTerminating)},
+	}
+	for i, s := range observed {
+		key := fmt.Sprintf(":slot%d", i)
+		condition += fmt.Sprintf(" AND slots[%d].#status = %s", i, key)
+		values[key] = &types.AttributeValueMemberS{Value: string(s.Status)}
+	}
+
 	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: runnerPK(runnerID)},
 			"sk": &types.AttributeValueMemberS{Value: stateSK},
 		},
-		ConditionExpression: aws.String("#status IN (:provisioning, :active)"),
+		ConditionExpression: aws.String(condition),
 		UpdateExpression:    aws.String("SET #status = :terminating REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",
 		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":provisioning": &types.AttributeValueMemberS{Value: string(RunnerProvisioning)},
-			":active":       &types.AttributeValueMemberS{Value: string(RunnerActive)},
-			":terminating":  &types.AttributeValueMemberS{Value: string(RunnerTerminating)},
-		},
+		ExpressionAttributeValues: values,
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {

@@ -66,7 +66,7 @@ func init() {
 	}, cfg, st)
 	ec2Client := awsinternal.NewEC2(awsCfg)
 
-	service = cleanup.NewService(cfg, st, ghProvider, ec2Client, logger)
+	service = cleanup.NewService(cfg, st, ghProvider, ec2Client, awsinternal.NewSSM(awsCfg), logger)
 }
 
 func handleEvent(ctx context.Context, event events.CloudWatchEvent) error {

@@ -16,6 +16,11 @@ import (
 // registered — treated as "already gone" by cleanup, not an error.
 var ErrRunnerNotFound = errors.New("github: runner not found")
 
+// ErrRunnerBusy indicates GitHub refused to deregister a runner because it
+// is currently running a job (HTTP 422). Cleanup treats it as "not yet" and
+// retries on a later sweep, never as a reason to abandon the termination.
+var ErrRunnerBusy = errors.New("github: runner is currently running a job")
+
 // RegistrationToken is a short-lived, single-use token an EC2 instance uses
 // to register itself as a runner. Generated here and handed to the instance
 // via UserData — the instance never sees the App private key, JWT, or
@@ -45,7 +50,8 @@ func CreateRegistrationToken(ctx context.Context, client *github.Client, cfg con
 
 // RemoveRunner deregisters a runner by its GitHub-assigned runner ID, scoped
 // per cfg.Scope. A 404 (already removed) is treated as success so cleanup
-// stays idempotent under retries.
+// stays idempotent under retries; a 422 (runner still running a job) is
+// returned as ErrRunnerBusy.
 func RemoveRunner(ctx context.Context, client *github.Client, cfg config.RunnerConfig, runnerID int64) error {
 	var (
 		resp *github.Response
@@ -57,6 +63,9 @@ func RemoveRunner(ctx context.Context, client *github.Client, cfg config.RunnerC
 		resp, err = client.Actions.RemoveRunner(ctx, cfg.Organization, cfg.Repository, runnerID)
 	}
 	if err != nil && !isNotFound(resp, err) {
+		if hasStatus(resp, err, http.StatusUnprocessableEntity) {
+			return fmt.Errorf("github: remove runner %d: %w: %v", runnerID, ErrRunnerBusy, err)
+		}
 		return fmt.Errorf("github: remove runner %d: %w", runnerID, err)
 	}
 	return nil
@@ -109,9 +118,13 @@ func FindRunnerByName(ctx context.Context, client *github.Client, cfg config.Run
 }
 
 func isNotFound(resp *github.Response, err error) bool {
-	if resp != nil && resp.StatusCode == http.StatusNotFound {
+	return hasStatus(resp, err, http.StatusNotFound)
+}
+
+func hasStatus(resp *github.Response, err error, status int) bool {
+	if resp != nil && resp.StatusCode == status {
 		return true
 	}
 	var ghErr *github.ErrorResponse
-	return errors.As(err, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == http.StatusNotFound
+	return errors.As(err, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == status
 }

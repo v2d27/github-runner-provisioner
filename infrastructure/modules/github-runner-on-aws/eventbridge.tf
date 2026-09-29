@@ -19,8 +19,8 @@ resource "aws_lambda_permission" "scheduled_sweep" {
 }
 
 # Optional: react to an EC2 Spot interruption notice within its ~2 minute
-# warning window, instead of waiting for the next scheduled sweep (which
-# doesn't look at TERMINATING runners anyway). The same cleanup Lambda
+# warning window, instead of waiting up to one full schedule interval for
+# the next scheduled sweep. The same cleanup Lambda
 # branches on detail-type (see cmd/cleanup/main.go).
 resource "aws_cloudwatch_event_rule" "spot_interruption" {
   count       = var.enable_spot_interruption_rule ? 1 : 0

@@ -86,9 +86,11 @@ func (s *Service) provisionRunner(ctx context.Context, sel store.PoolSelector, p
 			// one EC2 instance can host multiple runner slots
 			// (profile.RunnerCount), so tagging it with a single slot's
 			// identity would be misleading.
-			"Name":          base,
-			"ManagedBy":     "github-runner-provisioner",
-			"RunnerProfile": sel.Profile,
+			"Name":            base,
+			aws.TagManagedBy:  aws.ManagedByValue,
+			aws.TagDeployment: s.store.TableName(),
+			aws.TagRunnerID:   runnerID,
+			"RunnerProfile":   sel.Profile,
 		},
 	})
 	if err != nil {

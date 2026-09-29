@@ -204,8 +204,10 @@ infrastructure:
     # sqs.tf.
     provision_lambda_timeout: 60
 
-    # -- (int, seconds) cleanup Lambda timeout.
-    cleanup_lambda_timeout: 60
+    # -- (int, seconds) cleanup Lambda timeout. Keep below the sweep
+    # interval (3 minutes) so sweeps don't overlap; a release burst can make
+    # one sweep take well over a minute of GitHub API calls.
+    cleanup_lambda_timeout: 150
 
     # -- (int, seconds) ready Lambda timeout (the runner-ready callback
     # instances call back via UserData).

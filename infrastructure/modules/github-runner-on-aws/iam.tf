@@ -181,7 +181,7 @@ data "aws_iam_policy_document" "cleanup" {
       "dynamodb:GetItem",
       "dynamodb:UpdateItem",
       "dynamodb:Query",
-      # ListActiveInstances (internal/store/runner.go) scans the base table
+      # ListLiveInstances (internal/store/runner.go) scans the base table
       # directly rather than a GSI — see that function's own doc comment for
       # why a Scan is the deliberate choice here. Without this action, every
       # scheduled sweep fails outright before it can expire a single idle
@@ -194,6 +194,30 @@ data "aws_iam_policy_document" "cleanup" {
     sid       = "DescribeInstances"
     actions   = ["ec2:DescribeInstances"]
     resources = ["*"] # DescribeInstances does not support resource-level restriction
+  }
+  # Runs `ps aux | grep -E 'Runner.Listener|Runner.Worker'` on runner
+  # instances (internal/aws/ssm.go) to confirm no job is executing before
+  # terminating one. Limited to the stock AWS-RunShellScript document and to
+  # instances tagged as this platform's runners.
+  statement {
+    sid       = "RunnerProcessCheckDocument"
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:aws:ssm:*::document/AWS-RunShellScript"]
+  }
+  statement {
+    sid       = "RunnerProcessCheckInstances"
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:aws:ec2:*:*:instance/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/ManagedBy"
+      values   = ["github-runner-provisioner"]
+    }
+  }
+  statement {
+    sid       = "RunnerProcessCheckResults"
+    actions   = ["ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation"]
+    resources = ["*"] # neither supports resource-level restriction
   }
   statement {
     sid       = "TerminateManagedRunners"
@@ -211,4 +235,35 @@ resource "aws_iam_role_policy" "cleanup" {
   name   = "${local.name_prefix}-cleanup"
   role   = aws_iam_role.cleanup.id
   policy = data.aws_iam_policy_document.cleanup.json
+}
+
+# Just enough for the runner instances' SSM agent to register and receive Run
+# Command (the cleanup Lambda's runner process check). Deliberately not the
+# AmazonSSMManagedInstanceCore managed policy: that also grants
+# ssm:GetParameter(s) on every parameter in the account, and every CI job on
+# a runner can use the instance's credentials.
+data "aws_iam_policy_document" "instance_ssm_agent" {
+  statement {
+    sid = "SSMAgentRunCommand"
+    actions = [
+      "ssm:UpdateInstanceInformation",
+      "ec2messages:AcknowledgeMessage",
+      "ec2messages:DeleteMessage",
+      "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint",
+      "ec2messages:GetMessages",
+      "ec2messages:SendReply",
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+    ]
+    resources = ["*"] # none of these support resource-level restriction
+  }
+}
+
+resource "aws_iam_role_policy" "instance_ssm_agent" {
+  name   = "${local.name_prefix}-runner-ssm-agent"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.instance_ssm_agent.json
 }

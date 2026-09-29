@@ -102,8 +102,9 @@ variable "provision_lambda_timeout" {
 }
 
 variable "cleanup_lambda_timeout" {
-  type    = number
-  default = 60
+  type        = number
+  default     = 150
+  description = "Seconds. Keep below the cleanup_schedule_expression interval so sweeps don't overlap."
 }
 
 variable "ready_lambda_timeout" {

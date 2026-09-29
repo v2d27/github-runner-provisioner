@@ -6,12 +6,32 @@ package aws
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 )
+
+// Tags every runner instance is launched with. TagDeployment + TagRunnerID
+// let cleanup find an instance even when its instance ID never made it into
+// DynamoDB (see ListManagedInstances).
+const (
+	TagManagedBy   = "ManagedBy"
+	ManagedByValue = "github-runner-provisioner"
+	TagDeployment  = "RunnerDeployment"
+	TagRunnerID    = "RunnerID"
+)
+
+// ManagedInstance is one not-yet-terminated runner instance as EC2 sees it.
+type ManagedInstance struct {
+	InstanceID string
+	LaunchTime time.Time
+	Tags       map[string]string
+}
 
 // EC2 wraps the subset of the EC2 API the provision/cleanup Lambdas need.
 // The launch template referenced by LaunchInput.LaunchTemplateID already
@@ -115,16 +135,54 @@ func (e *EC2) rootVolumeOverride(ctx context.Context, imageID string, diskSizeGB
 }
 
 // TerminateInstance terminates a single instance. Terminating an instance
-// that's already gone is not an error — EC2 reports it as
-// already-terminated, which callers should treat as success.
+// that's already gone is not an error — EC2 reports a recently terminated
+// instance as already-terminated, and one it has since forgotten entirely
+// as InvalidInstanceID.NotFound; both are treated as success.
 func (e *EC2) TerminateInstance(ctx context.Context, instanceID string) error {
 	_, err := e.client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{instanceID},
 	})
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidInstanceID.NotFound" {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("aws: terminate instance %s: %w", instanceID, err)
 	}
 	return nil
+}
+
+// ListManagedInstances returns every pending/running/stopping/stopped
+// instance tagged as a runner of the given deployment.
+func (e *EC2) ListManagedInstances(ctx context.Context, deployment string) ([]ManagedInstance, error) {
+	p := ec2.NewDescribeInstancesPaginator(e.client, &ec2.DescribeInstancesInput{
+		Filters: []types.Filter{
+			{Name: aws.String("tag:" + TagManagedBy), Values: []string{ManagedByValue}},
+			{Name: aws.String("tag:" + TagDeployment), Values: []string{deployment}},
+			{Name: aws.String("instance-state-name"), Values: []string{"pending", "running", "stopping", "stopped"}},
+		},
+	})
+	var out []ManagedInstance
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("aws: list managed instances: %w", err)
+		}
+		for _, r := range page.Reservations {
+			for _, i := range r.Instances {
+				tags := make(map[string]string, len(i.Tags))
+				for _, t := range i.Tags {
+					tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
+				}
+				out = append(out, ManagedInstance{
+					InstanceID: aws.ToString(i.InstanceId),
+					LaunchTime: aws.ToTime(i.LaunchTime),
+					Tags:       tags,
+				})
+			}
+		}
+	}
+	return out, nil
 }
 
 // InstanceState reports the current lifecycle state (e.g. "running",
